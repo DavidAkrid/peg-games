@@ -4,6 +4,7 @@
   <title>Pinball</title>
   <style>
     body { margin: 0; background: #060610; overflow: hidden; }
+    canvas { filter: saturate(1.6) brightness(1.12) contrast(1.05); }
     .side-panel {
       position: fixed;
       top: 50%;
@@ -348,10 +349,10 @@ class Pinball extends Phaser.Scene {
     this.lPrevAng = L_REST; this.rPrevAng = R_REST;
     this.levelParams = getLevelParams(this.level);
     this.bumpers  = null;
-    this.trail    = [];
+    this.balls    = [];
+    this.launchBall = null;
     this.shieldHP = 0;
     this.shieldRechargeTimer = null;
-    this.extraBalls = [];
 
     this.matter.world.setGravity(0, GRAVITY * SUBSTEPS);
     this.matter.world.autoUpdate = false;
@@ -360,8 +361,6 @@ class Pinball extends Phaser.Scene {
     const dotGfx = this.make.graphics({ x: 0, y: 0, add: false });
     dotGfx.fillStyle(0xffffff); dotGfx.fillCircle(4, 4, 4);
     dotGfx.generateTexture('dot', 8, 8); dotGfx.destroy();
-
-    this.trailGfx = this.add.graphics().setDepth(8);
 
     this.buildBG();
     this.buildWalls();
@@ -382,7 +381,12 @@ class Pinball extends Phaser.Scene {
     const { bg, grid } = getBgColors(this.level);
     this.add.rectangle(W / 2, H / 2, W, H, bg);
     const g = this.add.graphics();
-    g.lineStyle(1, grid, 1);
+    // glow pass
+    g.lineStyle(r(4), grid, 0.12);
+    for (let x = BX1; x <= BX2; x += r(30)) g.lineBetween(x, BY1, x, H);
+    for (let y = BY1; y <= H;   y += r(30)) g.lineBetween(BX1, y, BX2, y);
+    // crisp pass
+    g.lineStyle(1, grid, 0.9);
     for (let x = BX1; x <= BX2; x += r(30)) g.lineBetween(x, BY1, x, H);
     for (let y = BY1; y <= H;   y += r(30)) g.lineBetween(BX1, y, BX2, y);
   }
@@ -393,13 +397,19 @@ class Pinball extends Phaser.Scene {
     const mid = (BX1 + BX2) / 2, wallH = H * 2;
 
     const g = this.add.graphics();
-    g.lineStyle(2, 0x1e2a50);
+    g.lineStyle(r(8), 0x2244aa, 0.15);
+    g.moveTo(BX1, BY1); g.lineTo(BX1, H);
+    g.moveTo(BX2, BY1); g.lineTo(BX2, H);
+    g.strokePath();
+    g.lineStyle(2, 0x3355cc, 1);
     g.moveTo(BX1, BY1); g.lineTo(BX1, H);
     g.moveTo(BX2, BY1); g.lineTo(BX2, H);
     g.strokePath();
 
     this.topBorderGfx = this.add.graphics();
-    this.topBorderGfx.lineStyle(2, 0x1e2a50);
+    this.topBorderGfx.lineStyle(r(8), 0x2244aa, 0.15);
+    this.topBorderGfx.lineBetween(BX1, BY1, BX2, BY1);
+    this.topBorderGfx.lineStyle(2, 0x3355cc, 1);
     this.topBorderGfx.lineBetween(BX1, BY1, BX2, BY1);
 
     this.matter.add.rectangle(BX1 - r(150), H / 2, r(300), wallH, { isStatic: true });
@@ -413,9 +423,9 @@ class Pinball extends Phaser.Scene {
 
   buildGutters() {
     const lStartY = LP.y - (LP.x - BX1) * Math.tan(FA);
-    this.addSeg(BX1, lStartY, LP.x, LP.y, 0x1e2a50, 30);
+    this.addSeg(BX1, lStartY, LP.x, LP.y, 0x1e3060, 30);
     const rStartY = RP.y - (BX2 - RP.x) * Math.tan(FA);
-    this.addSeg(BX2, rStartY, RP.x, RP.y, 0x1e2a50, 30);
+    this.addSeg(BX2, rStartY, RP.x, RP.y, 0x1e3060, 30);
   }
 
   addSeg(x1, y1, x2, y2, color, height = 8) {
@@ -435,7 +445,8 @@ class Pinball extends Phaser.Scene {
     }));
     const g = this.add.graphics();
     g.fillStyle(color, 0.55); g.fillPoints(corners, true);
-    g.lineStyle(2, color, 1); g.strokePoints(corners, true);
+    g.lineStyle(r(8), 0x3355cc, 0.15); g.strokePoints(corners, true);
+    g.lineStyle(2, 0x3355cc, 1);       g.strokePoints(corners, true);
   }
 
   // ─── Flippers ─────────────────────────────────────────────────────────────────
@@ -597,9 +608,13 @@ class Pinball extends Phaser.Scene {
     };
     const c = C[b.type] || C.normal;
     gfx.clear();
-    gfx.fillStyle(c.bg);    gfx.fillCircle(b.x, b.y, b.r);
-    gfx.lineStyle(2,c.ring);  gfx.strokeCircle(b.x, b.y, b.r);
-    gfx.lineStyle(1,c.inner); gfx.strokeCircle(b.x, b.y, b.r - 5);
+    // outer glow halo
+    gfx.lineStyle(r(10), c.ring, 0.10); gfx.strokeCircle(b.x, b.y, b.r);
+    gfx.lineStyle(r(5),  c.ring, 0.18); gfx.strokeCircle(b.x, b.y, b.r);
+    // fill + crisp rings
+    gfx.fillStyle(c.bg);               gfx.fillCircle(b.x, b.y, b.r);
+    gfx.lineStyle(2, c.ring, 1);        gfx.strokeCircle(b.x, b.y, b.r);
+    gfx.lineStyle(1, c.inner, 1);       gfx.strokeCircle(b.x, b.y, b.r - 5);
   }
 
   // ─── Reroll ───────────────────────────────────────────────────────────────────
@@ -678,7 +693,7 @@ class Pinball extends Phaser.Scene {
   }
 
   refreshHP() {
-    const ballCount = 1 + this.inventory.filter(k => k === 'multiball').length;
+    const ballCount = Math.max(1, this.balls.length);
     window.updateSideHP?.(this.hp, this.maxHP, ballCount);
     window.updateEquipped?.(this.inventory);
   }
@@ -726,7 +741,7 @@ class Pinball extends Phaser.Scene {
     sec(DX, y, '─ GAME STATE'); y += r(13);
     dbBtn(DX,       y, 'SHOP',      () => this.scene.start('Shop', { level: this.level, score: this.score, ballsLeft: this.ballsLeft, hp: this.hp, maxHP: this.maxHP, gold: this.gold, inventory: [...this.inventory] }));
     dbBtn(DX+r(52),  y, 'NEXT LVL',  () => { if (!this.levelComplete) { this.levelComplete = true; this.nextLevel(); } });
-    dbBtn(DX+r(126), y, 'GAME OVER', () => { this.ballsLeft = 1; if (this.ballBody) this.drain(); });
+    dbBtn(DX+r(126), y, 'GAME OVER', () => { this.ballsLeft = 1; for (let i = this.balls.length-1; i >= 0; i--) this.drainBall(i); });
     dbBtn(DX+r(216), y, 'RESET',     () => this.scene.start('Pinball', {}));
     y += r(22);
 
@@ -828,13 +843,17 @@ class Pinball extends Phaser.Scene {
 
   spawnBall() {
     const sx = (LP.x + RP.x) / 2, sy = H - r(58);
-    this.ballBody = this.matter.add.circle(sx, sy, BALL_R, {
+    const body = this.matter.add.circle(sx, sy, BALL_R, {
       label: 'ball', restitution: 0.5, friction: 0.003,
       frictionAir: 0.004, density: 0.004
     });
-    MBody.setStatic(this.ballBody, true);
-    this.ballGfx  = this.add.circle(sx, sy, BALL_R, 0xdde0ff).setDepth(10);
-    this.ballRing = this.add.graphics().setDepth(9);
+    MBody.setStatic(body, true);
+    const gfx      = this.add.circle(sx, sy, BALL_R, 0xdde0ff).setDepth(10);
+    const ring     = this.add.graphics().setDepth(9);
+    const trailGfx = this.add.graphics().setDepth(8);
+    const ball = { body, gfx, ring, trailGfx, trail: [] };
+    this.balls.push(ball);
+    this.launchBall = ball;
     this.launched = false;
     this.launchTxt.setVisible(true);
     fireHook(this, 'onBallSpawn');
@@ -849,28 +868,64 @@ class Pinball extends Phaser.Scene {
     MBody.setVelocity(body, {
       x: Phaser.Math.FloatBetween(0.5 * S, 1.8 * S), y: -10 * S
     });
-    const gfx      = this.add.circle(sx, sy, BALL_R, 0xffccee).setDepth(10);
+    const gfx      = this.add.circle(sx, sy, BALL_R, 0xdde0ff).setDepth(10);
     const ring     = this.add.graphics().setDepth(9);
     const trailGfx = this.add.graphics().setDepth(7);
-    const eb = { body, gfx, ring, trailGfx, trail: [] };
-    this.extraBalls.push(eb);
+    this.balls.push({ body, gfx, ring, trailGfx, trail: [] });
     this.refreshHP();
   }
 
-  drainExtraBall(i) {
-    const eb = this.extraBalls[i];
-    const { x, y } = eb.body.position;
+  drainBall(i) {
+    const ball = this.balls[i];
+    const { x, y } = ball.body.position;
+
+    // Pop effect
     const m = this.add.particles('dot').setDepth(30);
     m.createEmitter({
       speed: { min: 40, max: 160 }, angle: { min: 0, max: 360 },
       scale: { start: 0.8, end: 0 }, lifespan: { min: 200, max: 500 },
-      tint: [0xff88cc, 0xffaadd, 0xffffff], blendMode: 'ADD', gravityY: 200, on: false
+      tint: [0xaabbff, 0xddeeff, 0xffffff], blendMode: 'ADD', gravityY: 200, on: false
     }).explode(14, x, y);
     this.time.delayedCall(600, () => m.destroy());
-    this.matter.world.remove(eb.body);
-    eb.gfx.destroy(); eb.ring.destroy(); eb.trailGfx.destroy();
-    this.extraBalls.splice(i, 1);
-    this.refreshHP();
+
+    this.matter.world.remove(ball.body);
+    ball.gfx.destroy(); ball.ring.destroy(); ball.trailGfx.destroy();
+    this.balls.splice(i, 1);
+
+    // Other balls still alive — stay in play
+    if (this.balls.length > 0) {
+      this.refreshHP();
+      return;
+    }
+
+    // Last ball — real drain
+    this.cameras.main.shake(200, 0.011);
+    this.cameras.main.flash(160, 200, 40, 40, false);
+    if (this.shieldRechargeTimer) { this.shieldRechargeTimer.remove(); this.shieldRechargeTimer = null; }
+    this.shieldHP = 0;
+
+    this.ballsLeft--;
+    this.ballsTxt.setText(`BALLS  ${this.ballsLeft}`);
+
+    if (this.ballsLeft <= 0) {
+      const ox = W/2, oy = H/2;
+      this.add.rectangle(ox, oy, r(300), r(140), 0x040408, 0.95).setDepth(30);
+      this.add.text(ox, oy-r(40), 'GAME  OVER',
+        { fontSize: fs(22), color: '#ff4455', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      this.add.text(ox, oy-r(12), `SCORE  ${this.score}`,
+        { fontSize: fs(14), color: '#7788cc', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      this.add.text(ox, oy+r(8), `GOLD  ${this.gold}  |  LEVEL  ${this.level}`,
+        { fontSize: fs(12), color: '#ccaa00', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      this.add.text(ox, oy+r(34), 'click or SPACE to restart',
+        { fontSize: fs(11), color: '#333355', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      const doRestart = () => this.scene.start('Pinball', {});
+      this.input.once('pointerdown', doRestart);
+      this.input.keyboard.once('keydown-SPACE', doRestart);
+    } else {
+      this.hp = this.maxHP;
+      this.refreshHP();
+      this.time.delayedCall(900, () => this.spawnBall());
+    }
   }
 
   // ─── Input ────────────────────────────────────────────────────────────────────
@@ -946,7 +1001,7 @@ class Pinball extends Phaser.Scene {
           this.hp = Math.max(0, this.hp - 1);
           this.refreshHP();
           this.showPopup(b.x, b.y - b.r, '-1 HP', '#ff6666', [0xff2222, 0xff6600, 0xff0066]);
-          if (this.hp <= 0) this.time.delayedCall(200, () => this.drain());
+          if (this.hp <= 0) this.time.delayedCall(200, () => { for (let i = this.balls.length-1; i >= 0; i--) this.drainBall(i); });
         }
         break;
 
@@ -1083,27 +1138,32 @@ class Pinball extends Phaser.Scene {
   update(time, delta) {
     const k = this.keys;
 
-    if (Phaser.Input.Keyboard.JustDown(k.space) && !this.launched) {
-      MBody.setStatic(this.ballBody, false);
+    if (Phaser.Input.Keyboard.JustDown(k.space) && !this.launched && this.launchBall) {
+      MBody.setStatic(this.launchBall.body, false);
       const xSign = Math.random() < 0.5 ? 1 : -1;
-      MBody.setVelocity(this.ballBody, {
+      MBody.setVelocity(this.launchBall.body, {
         x: xSign * Phaser.Math.FloatBetween(0.8 * S, 2.0 * S), y: -7 * S
       });
       this.launched = true;
+      this.launchBall = null;
       this.launchTxt.setVisible(false);
       const mbCount = this.inventory.filter(k => k === 'multiball').length;
       for (let i = 0; i < mbCount; i++) this.spawnExtraBall();
     }
 
     if (Phaser.Input.Keyboard.JustDown(k.shift) && this.launched &&
-        this.ballBody && !this.ballBody.isStatic && time > this.shakeReadyAt) {
+        this.balls.length > 0 && time > this.shakeReadyAt) {
       this.shakeReadyAt = time + 1500;
       const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-      const v = this.ballBody.velocity;
-      MBody.setVelocity(this.ballBody, {
-        x: v.x + Math.cos(angle) * 5 * S,
-        y: v.y + Math.sin(angle) * 5 * S - 2 * S
-      });
+      // Apply nudge to first live ball
+      const b0 = this.balls[0];
+      if (!b0.body.isStatic) {
+        const v = b0.body.velocity;
+        MBody.setVelocity(b0.body, {
+          x: v.x + Math.cos(angle) * 5 * S,
+          y: v.y + Math.sin(angle) * 5 * S - 2 * S
+        });
+      }
       this.cameras.main.shake(140, 0.007);
     }
 
@@ -1144,11 +1204,12 @@ class Pinball extends Phaser.Scene {
 
       this.matter.world.step(delta / N);
 
-      if (this.ballBody && !this.ballBody.isStatic) {
-        const v = this.ballBody.velocity;
+      for (const ball of this.balls) {
+        if (ball.body.isStatic) continue;
+        const v = ball.body.velocity;
         const spd = Math.sqrt(v.x*v.x + v.y*v.y);
         if (spd > MAX_BALL_V)
-          MBody.setVelocity(this.ballBody, { x: v.x/spd*MAX_BALL_V, y: v.y/spd*MAX_BALL_V });
+          MBody.setVelocity(ball.body, { x: v.x/spd*MAX_BALL_V, y: v.y/spd*MAX_BALL_V });
       }
     }
 
@@ -1159,120 +1220,51 @@ class Pinball extends Phaser.Scene {
       this.drawFlipper(this.rFlipGfx2, this.rFlipBody2, rActive, FL2, FH2);
     }
 
-    // Ball trail
-    if (this.launched && this.ballBody && !this.ballBody.isStatic) {
-      this.trail.unshift({ x: this.ballBody.position.x, y: this.ballBody.position.y });
-      if (this.trail.length > 20) this.trail.length = 20;
-    }
-    this.trailGfx.clear();
-    for (let i = 0; i < this.trail.length; i++) {
-      const alpha = (1 - i / this.trail.length) * 0.25;
-      const tr = BALL_R * (1 - i / this.trail.length);
-      this.trailGfx.fillStyle(0xaabbff, alpha);
-      this.trailGfx.fillCircle(this.trail[i].x, this.trail[i].y, tr);
-    }
+    // All balls — unified loop
+    for (let i = this.balls.length - 1; i >= 0; i--) {
+      const ball = this.balls[i];
+      const { x, y } = ball.body.position;
 
-    if (this.ballBody) {
-      const { x, y } = this.ballBody.position;
-      this.ballGfx.setPosition(x, y);
-      this.ballRing.clear();
-      this.ballRing.lineStyle(r(3), 0x6666cc, 0.35);
-      this.ballRing.strokeCircle(x, y, BALL_R);
+      // Trail
+      if (this.launched && !ball.body.isStatic) {
+        ball.trail.unshift({ x, y });
+        if (ball.trail.length > 20) ball.trail.length = 20;
+      }
+      ball.trailGfx.clear();
+      for (let j = 0; j < ball.trail.length; j++) {
+        const alpha = (1 - j / ball.trail.length) * 0.25;
+        ball.trailGfx.fillStyle(0xaabbff, alpha);
+        ball.trailGfx.fillCircle(ball.trail[j].x, ball.trail[j].y, BALL_R * (1 - j / ball.trail.length));
+      }
+
+      // Position + ring
+      ball.gfx.setPosition(x, y);
+      ball.ring.clear();
+      ball.ring.lineStyle(r(3), 0x6666cc, 0.35);
+      ball.ring.strokeCircle(x, y, BALL_R);
       if (this.shieldHP > 0) {
         const shieldCol = this.shieldHP >= 3 ? 0xaa44ff : this.shieldHP === 2 ? 0x44aaff : 0x888899;
-        this.ballRing.lineStyle(r(2), shieldCol, 0.85);
-        this.ballRing.strokeCircle(x, y, BALL_R + r(5));
+        ball.ring.lineStyle(r(2), shieldCol, 0.85);
+        ball.ring.strokeCircle(x, y, BALL_R + r(5));
       } else if (this.shieldRechargeTimer) {
-        this.ballRing.lineStyle(r(1), 0x224466, 0.4);
-        this.ballRing.strokeCircle(x, y, BALL_R + r(5));
+        ball.ring.lineStyle(r(1), 0x224466, 0.4);
+        ball.ring.strokeCircle(x, y, BALL_R + r(5));
       }
-    }
 
-    // Extra balls (multiball)
-    for (let i = this.extraBalls.length - 1; i >= 0; i--) {
-      const eb = this.extraBalls[i];
-      eb.trail.unshift({ x: eb.body.position.x, y: eb.body.position.y });
-      if (eb.trail.length > 20) eb.trail.length = 20;
-      eb.trailGfx.clear();
-      for (let j = 0; j < eb.trail.length; j++) {
-        eb.trailGfx.fillStyle(0xffaabb, (1 - j / eb.trail.length) * 0.22);
-        eb.trailGfx.fillCircle(eb.trail[j].x, eb.trail[j].y, BALL_R * (1 - j / eb.trail.length));
-      }
-      const { x, y } = eb.body.position;
-      eb.gfx.setPosition(x, y);
-      eb.ring.clear();
-      eb.ring.lineStyle(r(3), 0xcc6699, 0.35);
-      eb.ring.strokeCircle(x, y, BALL_R);
-      if (eb.body.position.y > H + 30) { this.drainExtraBall(i); continue; }
+      // Drain
+      if (y > H + 30) { this.drainBall(i); continue; }
+
+      // Level complete
       if (this.launched && this.lockUnlocked && !this.levelComplete && y < BY1 - 20) {
         this.levelComplete = true; this.nextLevel();
       }
     }
-
-    if (this.launched && this.lockUnlocked && !this.levelComplete &&
-        this.ballBody && this.ballBody.position.y < BY1 - 20) {
-      this.levelComplete = true;
-      this.nextLevel();
-    }
-
-    if (this.launched && this.ballBody && this.ballBody.position.y > H + 30)
-      this.drain();
 
     for (const b of this.bumpers) {
       if (b.flash > 0) { b.flash--; this.drawBumper(b.gfx, b, b.flash > 0); }
     }
   }
 
-  // ─── Drain ────────────────────────────────────────────────────────────────────
-
-  drain() {
-    if (!this.ballBody) return;
-
-    // Death effects — capture position before destroying
-    const bx = this.ballBody.position.x, by = this.ballBody.position.y;
-    this.cameras.main.shake(200, 0.011);
-    this.cameras.main.flash(160, 200, 40, 40, false);
-    const deathMgr = this.add.particles('dot').setDepth(30);
-    deathMgr.createEmitter({
-      speed: { min: 55, max: 210 }, angle: { min: 0, max: 360 },
-      scale: { start: 1.1, end: 0 },
-      lifespan: { min: 280, max: 650 },
-      tint: [0xff3333, 0xff6600, 0xffaa00, 0xffffff],
-      blendMode: 'ADD', gravityY: 280, on: false
-    }).explode(22, bx, by);
-    this.time.delayedCall(750, () => deathMgr.destroy());
-
-    if (this.shieldRechargeTimer) { this.shieldRechargeTimer.remove(); this.shieldRechargeTimer = null; }
-    this.shieldHP = 0;
-    for (let i = this.extraBalls.length - 1; i >= 0; i--) this.drainExtraBall(i);
-
-    this.ballsLeft--;
-    this.ballsTxt.setText(`B:${this.ballsLeft}`);
-    this.matter.world.remove(this.ballBody);
-    this.ballGfx.destroy(); this.ballRing.destroy();
-    this.ballBody = null;
-    this.trail = []; this.trailGfx.clear();
-
-    if (this.ballsLeft <= 0) {
-      const ox = W/2, oy = H/2;
-      this.add.rectangle(ox, oy, r(300), r(140), 0x040408, 0.95).setDepth(30);
-      this.add.text(ox, oy-r(40), 'GAME  OVER',
-        { fontSize: fs(22), color: '#ff4455', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
-      this.add.text(ox, oy-r(12), `SCORE  ${this.score}`,
-        { fontSize: fs(14), color: '#7788cc', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
-      this.add.text(ox, oy+r(8), `GOLD  ${this.gold}  |  LEVEL  ${this.level}`,
-        { fontSize: fs(12), color: '#ccaa00', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
-      this.add.text(ox, oy+r(34), 'click or SPACE to restart',
-        { fontSize: fs(11), color: '#333355', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
-      const doRestart = () => this.scene.start('Pinball', {});
-      this.input.once('pointerdown', doRestart);
-      this.input.keyboard.once('keydown-SPACE', doRestart);
-    } else {
-      this.hp = this.maxHP;
-      this.refreshHP();
-      this.time.delayedCall(900, () => this.spawnBall());
-    }
-  }
 }
 
 // ─── Shop Scene ───────────────────────────────────────────────────────────────
