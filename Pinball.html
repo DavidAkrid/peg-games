@@ -53,15 +53,6 @@
   <div><span class="c-green">D / →</span>       right flipper</div>
   <div><span class="c-green">SHIFT</span>       shake board</div>
   <hr class="sep">
-  <h3>PEGS</h3>
-  <div><span class="c-dim">●</span> gray     common</div>
-  <div><span style="color:#009977">●</span> teal     uncommon</div>
-  <div><span style="color:#00bb88">●</span> green    rare</div>
-  <div><span style="color:#00ccdd">●</span> cyan     epic</div>
-  <div><span style="color:#99eeff">★</span> white    legendary</div>
-  <div><span class="c-gold">●</span> gold     +gold</div>
-  <div><span class="c-red">●</span> red      -1 HP</div>
-  <hr class="sep">
   <h3>GOAL</h3>
   <div>Hit the score target to</div>
   <div>open the top barrier,</div>
@@ -99,20 +90,30 @@ const MBody = Phaser.Physics.Matter.Matter.Body;
   } else { rp.style.display = 'none'; }
 })();
 
-window.updateObjective = function(levelScore, target) {
+window.updateObjective = function(current, target, type) {
   const el = document.getElementById('objective');
   if (!el) return;
   if (!target) { el.innerHTML = ''; return; }
-  const done = levelScore >= target;
-  const pct  = Math.min(100, Math.round(levelScore / target * 100));
-  const barColor = done ? '#00cc88' : (pct > 60 ? '#66bbff' : '#3355aa');
-  const scoreClass = done ? 'obj-done' : 'obj-value';
-  el.innerHTML = `<h3>OBJECTIVE</h3><div class="obj-label">SCORE</div>`
-    + `<div class="${scoreClass}">${levelScore} / ${target}</div>`
-    + `<div class="obj-bar-track"><div class="obj-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>`
-    + (done
-      ? `<div class="obj-escape">▲ ESCAPE ▲</div>`
-      : `<div class="obj-escape-blank">▲ ESCAPE ▲</div>`);
+  const done = current >= target;
+  const pct  = Math.min(100, Math.round(current / target * 100));
+
+  if (type === 'lock') {
+    const barColor = done ? '#cc88ff' : (pct > 60 ? '#aa55ff' : '#661199');
+    el.innerHTML = `<h3>OBJECTIVE</h3><div class="obj-label">HIT THE LOCK</div>`
+      + `<div class="obj-value" style="color:#cc88ff">${current} / ${target}</div>`
+      + `<div class="obj-bar-track"><div class="obj-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>`
+      + (done
+        ? `<div class="obj-escape">▲ ESCAPE ▲</div>`
+        : `<div class="obj-escape-blank">▲ ESCAPE ▲</div>`);
+  } else {
+    const barColor = done ? '#00cc88' : (pct > 60 ? '#66bbff' : '#3355aa');
+    el.innerHTML = `<h3>OBJECTIVE</h3><div class="obj-label">SCORE</div>`
+      + `<div class="${done ? 'obj-done' : 'obj-value'}">${current} / ${target}</div>`
+      + `<div class="obj-bar-track"><div class="obj-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>`
+      + (done
+        ? `<div class="obj-escape">▲ ESCAPE ▲</div>`
+        : `<div class="obj-escape-blank">▲ ESCAPE ▲</div>`);
+  }
 };
 
 window.updateSideHP = function(ballHPs, maxHP) {
@@ -194,6 +195,19 @@ function getLevelTarget(level) {
   if (level === 2) return 1500;
   if (level === 3) return 3000;
   return Math.round(3000 * Math.pow(1.85, level - 3));
+}
+
+// Every 5th level is a lock level
+function getLevelType(level) {
+  return level % 5 === 0 ? 'lock' : 'score';
+}
+
+// Returns { pegs, hitsEach } for a lock level
+function getLockConfig(level) {
+  const lockNum  = level / 5;                          // 1, 2, 3, 4...
+  const pegs     = lockNum >= 2 ? 2 : 1;
+  const hitsEach = Math.min(2 + lockNum, 6);           // 3, 4, 5, 6 (caps at 6)
+  return { pegs, hitsEach };
 }
 
 function getBgColors(level) {
@@ -579,10 +593,15 @@ class Pinball extends Phaser.Scene {
   generatePegTypes() {
     const { goldChance, damageCount, pegCount, pegVals } = this.levelParams;
 
-    const types = [
-      { type: 'gold', r: r(20) },           // guaranteed gold
-      { type: 'score', ...pegVals[3] },      // guaranteed T4 minimum
-    ];
+    const isLockLevel = getLevelType(this.level) === 'lock';
+    const types = [ { type: 'gold', r: r(20) } ];
+    if (isLockLevel) {
+      const { pegs, hitsEach } = getLockConfig(this.level);
+      for (let i = 0; i < pegs; i++)
+        types.push({ type: 'lock', r: r(24), hitsRequired: hitsEach, hitsLanded: 0 });
+    } else {
+      types.push({ type: 'score', ...pegVals[3] });
+    }
     for (let i = 0; i < damageCount; i++)
       types.push({ type: 'damage', r: r(18) });
 
@@ -635,6 +654,7 @@ class Pinball extends Phaser.Scene {
       for (const b of this.bumpers) {
         if (b.body) this.matter.world.remove(b.body);
         b.gfx?.destroy(); b.glowGfx?.destroy(); b.labelTxt?.destroy(); b.countTxt?.destroy();
+        b.lockDots?.forEach(d => d.destroy());
       }
     }
     const ts = { fontFamily: 'monospace', fontStyle: 'bold' };
@@ -646,7 +666,7 @@ class Pinball extends Phaser.Scene {
       const gfx = this.add.graphics();
       this.drawBumper(gfx, b, false);
 
-      let labelTxt = null;
+      let labelTxt = null, countTxt = null;
       if (b.type === 'gold') {
         labelTxt = this.add.text(b.x, b.y, 'G',
           { ...ts, fontSize: fs(14), color: '#ffdd44' }).setOrigin(0.5).setDepth(4);
@@ -659,20 +679,51 @@ class Pinball extends Phaser.Scene {
             color: this.scorePegColor(b.tier) }).setOrigin(0.5).setDepth(4);
       }
       let glowGfx = null;
-      if (b.type === 'score' && b.tier === 5) {
+      if ((b.type === 'score' && b.tier === 5) || b.type === 'lock') {
+        const glowColor = b.type === 'lock' ? 0xaa44ff : 0xeeffff;
+        const dur       = b.type === 'lock' ? 900 : 1400;
         glowGfx = this.add.graphics().setDepth(2);
-        glowGfx.lineStyle(r(18), 0xeeffff, 1);
-        glowGfx.strokeCircle(b.x, b.y, b.r + r(5));
+        // Radial gradient glow: concentric rings, inner bright → outer faint
+        const glowRings = [
+          { dr: r(3),  alpha: 0.55, w: r(4) },
+          { dr: r(6),  alpha: 0.35, w: r(3) },
+          { dr: r(10), alpha: 0.20, w: r(3) },
+          { dr: r(14), alpha: 0.10, w: r(2) },
+          { dr: r(18), alpha: 0.04, w: r(2) },
+        ];
+        for (const ring of glowRings) {
+          glowGfx.lineStyle(ring.w, glowColor, ring.alpha);
+          glowGfx.strokeCircle(b.x, b.y, b.r + ring.dr);
+        }
         this.tweens.add({
-          targets: glowGfx,
-          alpha: { from: 0.08, to: 0.45 },
-          duration: 1400,
-          ease: 'Sine.easeInOut',
-          yoyo: true,
-          repeat: -1
+          targets: glowGfx, alpha: { from: 0.15, to: 1 },
+          duration: dur, ease: 'Sine.easeInOut', yoyo: true, repeat: -1
         });
       }
-      return { body, gfx, glowGfx, labelTxt, countTxt: null, ...b, flash: 0 };
+      // Lock peg dots — die-face layout, dimmed as hits land
+      const lockDots = [];
+      if (b.type === 'lock') {
+        const n   = b.hitsRequired ?? 3;
+        const s   = r(7);
+        const layouts = {
+          1: [[0, 0]],
+          2: [[-s, 0], [s, 0]],
+          3: [[-s*1.1, 0], [0, 0], [s*1.1, 0]],
+          4: [[-s, -s], [s, -s], [-s, s], [s, s]],
+          5: [[-s, -s], [s, -s], [0, 0], [-s, s], [s, s]],
+          6: [[-s, -s], [s, -s], [-s, 0], [s, 0], [-s, s], [s, s]],
+        };
+        const positions = layouts[Math.min(n, 6)] ?? layouts[3];
+        for (let i = 0; i < n; i++) {
+          const [dx, dy] = positions[i] ?? [0, 0];
+          const hit = i < (b.hitsLanded ?? 0);
+          lockDots.push(this.add.text(b.x + dx, b.y + dy, '◉', {
+            fontFamily: 'monospace', fontStyle: 'bold', fontSize: fs(10),
+            color: hit ? '#2a1040' : '#cc88ff'
+          }).setOrigin(0.5).setDepth(4));
+        }
+      }
+      return { body, gfx, glowGfx, labelTxt, countTxt: null, lockDots, ...b, flash: 0 };
     });
   }
 
@@ -699,11 +750,19 @@ class Pinball extends Phaser.Scene {
       ];
       c = tColors[t - 1] ?? tColors[0];
     } else {
+      const lockStage = b.type === 'lock'
+        ? Math.min(b.hitsLanded ?? 0, (b.hitsRequired ?? 1) - 1) / Math.max((b.hitsRequired ?? 1) - 1, 1)
+        : 0;
       const C = {
         gold:   { bg: lit?0xffdd00:0x1a1000, ring: lit?0xffee88:0x886600, inner: lit?0xffffff:0x443300 },
         damage: disabled
           ? { bg: 0x111111, ring: 0x333333, inner: 0x222222 }
           : { bg: lit?0xff4444:0x220000, ring: lit?0xff9999:0x881111, inner: lit?0xffffff:0x440000 },
+        lock: lit
+          ? { bg: 0xdd44ff, ring: 0xffffff, inner: 0xee88ff }
+          : lockStage < 0.5
+            ? { bg: 0x1a0030, ring: 0x7722bb, inner: 0x330055 }
+            : { bg: 0x3a0060, ring: 0xcc55ff, inner: 0x7700bb },
       };
       c = C[b.type] ?? { bg: 0x111111, ring: 0x333333, inner: 0x222222 };
     }
@@ -737,6 +796,7 @@ class Pinball extends Phaser.Scene {
     const types = this.bumpers.map(b => {
       const def = { type: b.type, r: b.r };
       if (b.type === 'score') { def.tier = b.tier; def.value = b.value; }
+      if (b.type === 'lock')  { def.hitsRequired = b.hitsRequired; def.hitsLanded = b.hitsLanded ?? 0; }
       return def;
     });
     this.buildBumpers(this.placePegs(types));
@@ -770,7 +830,7 @@ class Pinball extends Phaser.Scene {
     ).setOrigin(1, 0.5).setDepth(21);
 
     this.refreshHP();
-    window.updateObjective?.(this.score - this.levelStartScore, getLevelTarget(this.level));
+    this.checkLevelProgress();
 
     this.rerollBtn = this.add.text(BX2-r(5), sub, '↺ REROLL  -2G', {
       fontSize: fs(11), color: '#55aa55', fontFamily: 'monospace',
@@ -845,7 +905,19 @@ class Pinball extends Phaser.Scene {
     // ── GAME STATE ──────────────────────────────────────────────────────────
     sec(DX, y, '─ GAME STATE'); y += r(13);
     dbBtn(DX,       y, 'SHOP',      () => this.scene.start('Shop', { level: this.level, score: this.score, ballsLeft: this.ballsLeft, hp: this.hp, maxHP: this.maxHP, gold: this.gold, inventory: [...this.inventory] }));
-    dbBtn(DX+r(52),  y, 'NEXT LVL',  () => { if (!this.levelComplete) { this.levelComplete = true; this.nextLevel(); } });
+    dbBtn(DX+r(52),  y, 'NEXT LVL',  () => {
+      if (this.levelComplete) return;
+      this.levelComplete = true;
+      this.scene.start('Pinball', {
+        level:     this.level + 1,
+        score:     this.score,
+        ballsLeft: this.ballsLeft + 3,
+        hp:        this.maxHP,
+        maxHP:     this.maxHP,
+        gold:      this.gold,
+        inventory: [...this.inventory],
+      });
+    });
     dbBtn(DX+r(126), y, 'GAME OVER', () => { this.ballsLeft = 1; for (let i = this.balls.length-1; i >= 0; i--) this.drainBall(i); });
     dbBtn(DX+r(216), y, 'RESET',     () => this.scene.start('Pinball', {}));
     y += r(22);
@@ -1136,6 +1208,22 @@ class Pinball extends Phaser.Scene {
         this.checkLevelProgress();
         break;
 
+      case 'lock': {
+        b.hitsLanded = (b.hitsLanded ?? 0) + 1;
+        const remaining = b.hitsRequired - b.hitsLanded;
+        this.drawBumper(b.gfx, b, true);
+        this.time.delayedCall(120, () => this.drawBumper(b.gfx, b, false));
+        if (b.lockDots?.[b.hitsLanded - 1]) b.lockDots[b.hitsLanded - 1].setColor('#2a1040');
+        this.pegPop(b.x, b.y);
+        this.showPopup(b.x, b.y - b.r,
+          remaining > 0 ? `${remaining} LEFT` : 'UNLOCKED!',
+          remaining > 0 ? '#cc88ff' : '#ffffff',
+          remaining > 0 ? [0xaa44ff, 0xdd88ff, 0xffffff] : [0xffffff, 0xddaaff, 0xaa44ff]
+        );
+        this.checkLevelProgress();
+        break;
+      }
+
       case 'damage':
         if (!ball) break;
         if (b.disabledUntil && this.time.now < b.disabledUntil) break;
@@ -1170,13 +1258,20 @@ class Pinball extends Phaser.Scene {
   // ─── Score-based level progress ───────────────────────────────────────────────
 
   checkLevelProgress() {
-    const target     = getLevelTarget(this.level);
-    const levelScore = this.score - this.levelStartScore;
     this.scoreTxt.setText(`SCORE  ${this.score}`);
     this.goldTxt.setText(`GOLD  ${this.gold}`);
-    window.updateObjective?.(levelScore, target);
-    if (!this.lockUnlocked && levelScore >= target) {
-      this.unlockTop();
+    if (getLevelType(this.level) === 'lock') {
+      const lockPegs  = this.bumpers.filter(b => b.type === 'lock');
+      if (!lockPegs.length) return;
+      const totalHits = lockPegs.reduce((s, b) => s + (b.hitsLanded ?? 0), 0);
+      const totalReq  = lockPegs.reduce((s, b) => s + b.hitsRequired, 0);
+      window.updateObjective?.(totalHits, totalReq, 'lock');
+      if (!this.lockUnlocked && lockPegs.every(b => (b.hitsLanded ?? 0) >= b.hitsRequired)) this.unlockTop();
+    } else {
+      const target     = getLevelTarget(this.level);
+      const levelScore = this.score - this.levelStartScore;
+      window.updateObjective?.(levelScore, target, 'score');
+      if (!this.lockUnlocked && levelScore >= target) this.unlockTop();
     }
   }
 
