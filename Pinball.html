@@ -21,6 +21,10 @@
     #objective .obj-label { font-size: 11px; color: #445566; letter-spacing: 1px; }
     #objective .obj-value { font-size: 22px; font-weight: bold; color: #6677bb; line-height: 1.3; }
     #objective .obj-done  { font-size: 22px; font-weight: bold; color: #00cc88; line-height: 1.3; }
+    #objective .obj-bar-track { width: 90px; height: 6px; background: #0d1222; border-radius: 3px; margin-top: 8px; }
+    #objective .obj-bar-fill  { height: 100%; border-radius: 3px; transition: width 0.2s ease; }
+    #objective .obj-escape    { font-size: 22px; font-weight: bold; color: #00cc88; margin-top: 8px; line-height: 1.3; }
+    #objective .obj-escape-blank { font-size: 22px; margin-top: 8px; line-height: 1.3; visibility: hidden; }
     #side-hp { font-size: 13px; line-height: 2; }
     #side-hp .hp-label  { color: #663333; font-size: 10px; letter-spacing: 1px; }
     #side-hp .hp-filled { color: #cc3333; }
@@ -100,10 +104,15 @@ window.updateObjective = function(levelScore, target) {
   if (!el) return;
   if (!target) { el.innerHTML = ''; return; }
   const done = levelScore >= target;
+  const pct  = Math.min(100, Math.round(levelScore / target * 100));
+  const barColor = done ? '#00cc88' : (pct > 60 ? '#66bbff' : '#3355aa');
+  const scoreClass = done ? 'obj-done' : 'obj-value';
   el.innerHTML = `<h3>OBJECTIVE</h3><div class="obj-label">SCORE</div>`
+    + `<div class="${scoreClass}">${levelScore} / ${target}</div>`
+    + `<div class="obj-bar-track"><div class="obj-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>`
     + (done
-      ? `<div class="obj-done">${levelScore} / ${target}<br>▲ ESCAPE ▲</div>`
-      : `<div class="obj-value">${levelScore} / ${target}</div>`);
+      ? `<div class="obj-escape">▲ ESCAPE ▲</div>`
+      : `<div class="obj-escape-blank">▲ ESCAPE ▲</div>`);
 };
 
 window.updateSideHP = function(ballHPs, maxHP) {
@@ -145,7 +154,7 @@ const GRAVITY    = 0.9 * S;
 const MAX_BALL_V = 16 * S;
 const BALL_R     = r(10);
 
-const BX1 = r(40), BX2 = r(440), BY1 = r(28);
+const BX1 = r(40), BX2 = r(440), BY1 = r(40);
 const FL  = r(82),  FH  = r(13),  FA = 0.50;
 const LP  = { x: r(152), y: r(590) };
 const RP  = { x: r(328), y: r(590) };
@@ -305,7 +314,7 @@ registerItem({
   key: 'staticShock', label: 'Static Shock', desc: 'Zaps nearby pegs on hit',
   cost: 8, color: '#55ccff', rarity: 'rare', maxStack: 4,
   onBumperHit: (s, count, b) => {
-    const chance = 0.3 + count * 0.1;           // 40% → 70%
+    const chance = [0, 0.10, 0.25, 0.50, 0.70][count] ?? 0.70;  // 10% → 25% → 50% → 70%
     const ZAP_R  = r(80 + count * 20);           // r(100) → r(160)
     if (s._zapChain || Math.random() > chance) return;
     const targets = s.bumpers
@@ -443,7 +452,7 @@ class Pinball extends Phaser.Scene {
   buildWalls() {
     const mid = (BX1 + BX2) / 2, wallH = H * 2;
 
-    const g = this.add.graphics();
+    const g = this.add.graphics().setDepth(4);
     g.lineStyle(r(8), 0x2244aa, 0.15);
     g.moveTo(BX1, BY1); g.lineTo(BX1, H);
     g.moveTo(BX2, BY1); g.lineTo(BX2, H);
@@ -453,11 +462,15 @@ class Pinball extends Phaser.Scene {
     g.moveTo(BX2, BY1); g.lineTo(BX2, H);
     g.strokePath();
 
-    this.topBorderGfx = this.add.graphics();
+    this.topBorderGfx = this.add.graphics().setDepth(4);
     this.topBorderGfx.lineStyle(r(8), 0x2244aa, 0.15);
-    this.topBorderGfx.lineBetween(BX1, BY1, BX2, BY1);
+    this.topBorderGfx.moveTo(BX1 - r(4), BY1);
+    this.topBorderGfx.lineTo(BX2 + r(4), BY1);
+    this.topBorderGfx.strokePath();
     this.topBorderGfx.lineStyle(2, 0x3355cc, 1);
-    this.topBorderGfx.lineBetween(BX1, BY1, BX2, BY1);
+    this.topBorderGfx.moveTo(BX1 - r(4), BY1);
+    this.topBorderGfx.lineTo(BX2 + r(4), BY1);
+    this.topBorderGfx.strokePath();
 
     this.matter.add.rectangle(BX1 - r(150), H / 2, r(300), wallH, { isStatic: true });
     this.matter.add.rectangle(BX2 + r(150), H / 2, r(300), wallH, { isStatic: true });
@@ -490,10 +503,9 @@ class Pinball extends Phaser.Scene {
     const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([lx,ly]) => ({
       x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos
     }));
-    const g = this.add.graphics();
+    const g = this.add.graphics().setDepth(2);
     g.fillStyle(color, 0.55); g.fillPoints(corners, true);
-    g.lineStyle(r(8), 0x3355cc, 0.15); g.strokePoints(corners, true);
-    g.lineStyle(2, 0x3355cc, 1);       g.strokePoints(corners, true);
+    g.lineStyle(2, 0x3355cc, 1); g.strokePoints(corners, true);
   }
 
   // ─── Flippers ─────────────────────────────────────────────────────────────────
@@ -1011,6 +1023,22 @@ class Pinball extends Phaser.Scene {
     }
 
     // Last ball — real drain
+    // Death blast from the bottom
+    const deathMgr = this.add.particles('dot').setDepth(3);
+    const deathEmitter = deathMgr.createEmitter({
+      x:        { min: BX1, max: BX2 },
+      y:        H,
+      speedX:   { min: -60, max: 60 },
+      speedY:   { min: -80, max: -400 },
+      scale:    { start: 1.0, end: 0 },
+      lifespan: { min: 500, max: 1200 },
+      tint:     [0xff3333, 0xff6600, 0xffaa00, 0xffffff],
+      blendMode: 'ADD', gravityY: -80, frequency: 10, quantity: 4,
+    });
+    this.time.delayedCall(400, () => {
+      deathEmitter.stop();
+      this.time.delayedCall(1200, () => deathMgr.destroy());
+    });
     this.cameras.main.shake(200, 0.011);
     this.cameras.main.flash(160, 200, 40, 40, false);
     if (this.shieldRechargeTimer) { this.shieldRechargeTimer.remove(); this.shieldRechargeTimer = null; }
