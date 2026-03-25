@@ -1212,17 +1212,20 @@ class Pinball extends Phaser.Scene {
     if (this.escapeHint) { this.escapeHint.destroy(); this.escapeHint = null; }
     // Level clear celebration burst
     const burst = this.add.particles('dot').setDepth(28);
-    burst.createEmitter({
-      x: { min: BX1 + 20, max: BX2 - 20 },
-      y: { min: r(200), max: r(500) },
-      speed: { min: 80, max: 300 },
-      angle: { min: 0, max: 360 },
-      scale: { start: 0.9, end: 0 },
-      lifespan: { min: 400, max: 1100 },
-      tint: [0x00ffaa, 0x44eeff, 0xffee44, 0xffffff, 0x00ccdd],
-      blendMode: 'ADD', gravityY: 120, on: false
-    }).explode(50, W / 2, H / 2);
-    this.time.delayedCall(1200, () => burst.destroy());
+    const burstEmitter = burst.createEmitter({
+      x:        { min: BX1, max: BX2 },
+      y:        BY1,
+      speedX:   { min: -60, max: 60 },
+      speedY:   { min: 80, max: 400 },
+      scale:    { start: 1.0, end: 0 },
+      lifespan: { min: 600, max: 1400 },
+      tint:     [0x00ffaa, 0x44eeff, 0xffee44, 0xffffff, 0x00ccdd],
+      blendMode: 'ADD', gravityY: 200, frequency: 10, quantity: 4,
+    });
+    this.time.delayedCall(500, () => {
+      burstEmitter.stop();
+      this.time.delayedCall(1500, () => burst.destroy());
+    });
 
     // Clean up all balls
     for (const ball of this.balls) {
