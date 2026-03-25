@@ -16,6 +16,11 @@
       white-space: nowrap;
       font-family: monospace;
     }
+    #objective { font-size: 13px; line-height: 1.8; color: #3a4a66; margin-bottom: 14px; }
+    #objective h3 { margin: 0 0 6px 0; font-size: 10px; color: #2a3a55; letter-spacing: 2px; }
+    #objective .obj-label { font-size: 11px; color: #445566; letter-spacing: 1px; }
+    #objective .obj-value { font-size: 22px; font-weight: bold; color: #6677bb; line-height: 1.3; }
+    #objective .obj-done  { font-size: 22px; font-weight: bold; color: #00cc88; line-height: 1.3; }
     #side-hp { font-size: 13px; line-height: 2; }
     #side-hp .hp-label  { color: #663333; font-size: 10px; letter-spacing: 1px; }
     #side-hp .hp-filled { color: #cc3333; }
@@ -36,6 +41,7 @@
   <div id="equipped-items"><h3>EQUIPPED</h3><span class="c-dim">— none —</span></div>
 </div>
 <div id="right-panel" class="side-panel">
+<div id="objective"></div>
 <div id="instructions">
   <h3>CONTROLS</h3>
   <div><span class="c-green">SPACE</span>       launch ball</div>
@@ -44,14 +50,17 @@
   <div><span class="c-green">SHIFT</span>       shake board</div>
   <hr class="sep">
   <h3>PEGS</h3>
-  <div><span class="c-purple">●</span> purple   +score</div>
+  <div><span class="c-dim">●</span> gray     common</div>
+  <div><span style="color:#009977">●</span> teal     uncommon</div>
+  <div><span style="color:#00bb88">●</span> green    rare</div>
+  <div><span style="color:#00ccdd">●</span> cyan     epic</div>
+  <div><span style="color:#99eeff">★</span> white    legendary</div>
   <div><span class="c-gold">●</span> gold     +gold</div>
   <div><span class="c-red">●</span> red      -1 HP</div>
-  <div><span class="c-blue">●</span> blue     lock — hit to open</div>
   <hr class="sep">
   <h3>GOAL</h3>
-  <div>Hit the <span class="c-blue">lock</span> enough times</div>
-  <div>to open the top barrier,</div>
+  <div>Hit the score target to</div>
+  <div>open the top barrier,</div>
   <div>then shoot the ball through.</div>
   <hr class="sep">
   <div class="c-dim">↺ REROLL pegs  -2G</div>
@@ -86,13 +95,24 @@ const MBody = Phaser.Physics.Matter.Matter.Body;
   } else { rp.style.display = 'none'; }
 })();
 
-window.updateSideHP = function(hp, maxHP, ballCount) {
+window.updateObjective = function(levelScore, target) {
+  const el = document.getElementById('objective');
+  if (!el) return;
+  if (!target) { el.innerHTML = ''; return; }
+  const done = levelScore >= target;
+  el.innerHTML = `<h3>OBJECTIVE</h3><div class="obj-label">SCORE</div>`
+    + (done
+      ? `<div class="obj-done">${levelScore} / ${target}<br>▲ ESCAPE ▲</div>`
+      : `<div class="obj-value">${levelScore} / ${target}</div>`);
+};
+
+window.updateSideHP = function(ballHPs, maxHP) {
   const el = document.getElementById('side-hp');
   if (!el) return;
   let html = '';
-  for (let i = 0; i < ballCount; i++) {
+  for (const hp of ballHPs) {
     html += '<div><span class="hp-label">HP  </span>';
-    html += '<span class="hp-filled">' + '█'.repeat(hp) + '</span>';
+    html += '<span class="hp-filled">' + '█'.repeat(Math.max(0, hp)) + '</span>';
     html += '<span class="hp-empty">'  + '░'.repeat(Math.max(0, maxHP - hp)) + '</span></div>';
   }
   el.innerHTML = html;
@@ -140,16 +160,31 @@ const R_REST = Math.PI - FA, R_ACTIVE =  Math.PI + FA;
 // All values derived from the level number — no hardcoded layouts.
 
 function getLevelParams(level) {
+  const target = getLevelTarget(level);
+  const pv = (pct, min) => Math.max(min, Math.round(target * pct));
   return {
-    // Hits needed to open the lock; grows with level
-    lockCount:   Math.min(3 + Math.floor(level * 0.7), 8),
-    // Chance a filler peg becomes gold instead of normal (purple)
-    goldChance:  Math.min(0.12 + level * 0.06, 0.65),
+    // Chance a filler peg becomes gold instead of a score peg
+    goldChance:  Math.min(0.10 + level * 0.05, 0.50),
     // Damage pegs: none on L1, +1 per level up to 5
     damageCount: Math.max(0, Math.min(level - 1, 5)),
-    // Total bumpers on the board (includes lock + guaranteed gold)
-    pegCount:    Math.min(4 + level, 11),
+    // Total bumpers on the board
+    pegCount:    Math.min(5 + level, 14),
+    // Score peg tiers — value scales with level target
+    pegVals: [
+      { tier: 1, value: pv(0.01,   1), r: r(12) },
+      { tier: 2, value: pv(0.03,   5), r: r(15) },
+      { tier: 3, value: pv(0.05,  10), r: r(17) },
+      { tier: 4, value: pv(0.10,  25), r: r(19) },
+      { tier: 5, value: pv(0.50, 100), r: r(22) },
+    ],
   };
+}
+
+function getLevelTarget(level) {
+  if (level === 1) return 500;
+  if (level === 2) return 1500;
+  if (level === 3) return 3000;
+  return Math.round(3000 * Math.pow(1.85, level - 3));
 }
 
 function getBgColors(level) {
@@ -186,11 +221,18 @@ function getBgColors(level) {
 //   oneTime   — if true, can only be owned once; excluded from pool after purchase
 
 const RARITY = {
-  common:    { label: 'COMMON',    color: 0x667788, hex: '#667788' },
-  uncommon:  { label: 'UNCOMMON',  color: 0x44aa66, hex: '#44aa66' },
-  rare:      { label: 'RARE',      color: 0x4477ff, hex: '#4477ff' },
-  legendary: { label: 'LEGENDARY', color: 0xff8800, hex: '#ff8800' },
+  common:    { label: 'COMMON',    color: 0x667788, hex: '#667788', stackMult: 1.15 },
+  uncommon:  { label: 'UNCOMMON',  color: 0x44aa66, hex: '#44aa66', stackMult: 1.30 },
+  rare:      { label: 'RARE',      color: 0x4477ff, hex: '#4477ff', stackMult: 1.60 },
+  legendary: { label: 'LEGENDARY', color: 0xff8800, hex: '#ff8800', stackMult: 2.00 },
 };
+
+// Returns the cost of the nth purchase of an item (count = copies already owned)
+function stackedCost(item, count) {
+  if (count <= 0) return item.cost;
+  const mult = (RARITY[item.rarity] ?? RARITY.common).stackMult;
+  return Math.round(item.cost * Math.pow(mult, count));
+}
 
 const ITEMS = {};
 const registerItem = def => { ITEMS[def.key] = def; };
@@ -203,7 +245,7 @@ const fireHook = (scene, hook, ...args) => {
 
 registerItem({
   key: 'plusBall', label: '+1 Ball', desc: 'One extra ball per purchase',
-  cost: 3, color: '#44aa44', rarity: 'common', maxStack: Infinity,
+  cost: 3, color: '#44aa44', rarity: 'common', maxStack: Infinity, transient: true,
   onBuy: s => { s.ballsLeft++; },
 });
 
@@ -214,7 +256,7 @@ registerItem({
 });
 
 registerItem({
-  key: 'bouncyPaddles', label: 'Bouncy Paddles', desc: 'Flippers launch harder — stacks increase power',
+  key: 'bouncyPaddles', label: 'Bouncy Paddles', desc: 'Flippers launch harder',
   cost: 5, color: '#3388ff', rarity: 'common', maxStack: 4,
   onApply: (s, count) => {
     const res = Math.min(count * 0.275, 1.0);
@@ -231,14 +273,18 @@ registerItem({
 });
 
 registerItem({
-  key: 'goldNugget', label: 'Gold Nugget', desc: 'Purple pegs have a chance to drop gold — stacks raise chance',
+  key: 'goldNugget', label: 'Gold Nugget', desc: 'Score pegs have a chance to drop gold',
   cost: 6, color: '#ddaa00', rarity: 'uncommon', maxStack: 4,
   onBumperHit: (s, count, b) => {
-    if (b.type === 'normal' && Math.random() < count * 0.25) {
-      s.gold++;
-      s.goldTxt.setText(`G:${s.gold}`);
-      s.updateRerollBtn();
-      s.showPopup(b.x, b.y - b.r, '+1 GOLD', '#ffee55', [0xffdd00, 0xffaa00, 0xffffff]);
+    if (b.type === 'score') {
+      const tierBonus = (b.tier ?? 1) * 0.08;  // T1=+8%, T5=+40%
+      const chance = count * 0.15 + tierBonus;
+      if (Math.random() < chance) {
+        s.gold++;
+        s.goldTxt.setText(`GOLD  ${s.gold}`);
+        s.updateRerollBtn();
+        s.showPopup(b.x, b.y - b.r, '+1 GOLD', '#ffee55', [0xffdd00, 0xffaa00, 0xffffff]);
+      }
     }
   },
 });
@@ -250,13 +296,13 @@ registerItem({
 });
 
 registerItem({
-  key: 'shieldedBall', label: 'Shielded Ball', desc: 'Absorbs damage hits — stacks add more charges',
+  key: 'shieldedBall', label: 'Shielded Ball', desc: 'Absorbs damage hits',
   cost: 7, color: '#44aaff', rarity: 'rare', maxStack: 3,
   onBallSpawn: (s, count) => { s.shieldHP = count; },
 });
 
 registerItem({
-  key: 'staticShock', label: 'Static Shock', desc: 'Zaps nearby pegs on hit — stacks raise chance & range',
+  key: 'staticShock', label: 'Static Shock', desc: 'Zaps nearby pegs on hit',
   cost: 8, color: '#55ccff', rarity: 'rare', maxStack: 4,
   onBumperHit: (s, count, b) => {
     const chance = 0.3 + count * 0.1;           // 40% → 70%
@@ -287,7 +333,7 @@ registerItem({
 });
 
 registerItem({
-  key: 'redStopper', label: 'Red Stopper', desc: 'Disables damage pegs — stacks add +1s each (max 5s)',
+  key: 'redStopper', label: 'Red Stopper', desc: 'Disables damage pegs after being hit',
   cost: 5, color: '#ff4444', rarity: 'uncommon', maxStack: 5,
   onBumperHit: (s, count, b) => {
     if (b.type !== 'damage') return;
@@ -305,7 +351,7 @@ registerItem({
 });
 
 registerItem({
-  key: 'multiHit', label: 'Multi Hit', desc: 'Each peg hit has a chance to trigger twice — stacks add +15%',
+  key: 'multiHit', label: 'Multi Hit', desc: 'Each peg hit has a chance to trigger twice',
   cost: 7, color: '#ffaa44', rarity: 'uncommon', maxStack: 5,
   onBumperHit: (s, count, b) => {
     if (s._multiHitChain) return;
@@ -341,10 +387,11 @@ class Pinball extends Phaser.Scene {
   get hasMidFlippers() { return this.inventory.includes('midFlippers'); }
 
   create() {
-    this.launched      = false;
-    this.lockHits      = 0;
-    this.lockUnlocked  = false;
-    this.levelComplete = false;
+    this.launched        = false;
+    this.lockUnlocked    = false;
+    this.levelComplete   = false;
+    this.levelStartScore = this.score;
+    this.popupBursts = new Map(); // key -> { index, time }
     this.lAng = L_REST; this.rAng = R_REST;
     this.lPrevAng = L_REST; this.rPrevAng = R_REST;
     this.levelParams = getLevelParams(this.level);
@@ -518,21 +565,35 @@ class Pinball extends Phaser.Scene {
   // ─── Level generation ─────────────────────────────────────────────────────────
 
   generatePegTypes() {
-    const { goldChance, damageCount, pegCount } = this.levelParams;
+    const { goldChance, damageCount, pegCount, pegVals } = this.levelParams;
 
     const types = [
-      { type: 'lock',   r: r(26) },
-      { type: 'gold',   r: r(20) },
+      { type: 'gold', r: r(20) },           // guaranteed gold
+      { type: 'score', ...pegVals[3] },      // guaranteed T4 minimum
     ];
     for (let i = 0; i < damageCount; i++)
       types.push({ type: 'damage', r: r(18) });
 
-    while (types.length < pegCount)
-      types.push(Math.random() < goldChance
-        ? { type: 'gold',   r: r(20) }
-        : { type: 'normal', r: r(18) });
-
+    while (types.length < pegCount) {
+      if (Math.random() < goldChance) {
+        types.push({ type: 'gold', r: r(20) });
+      } else {
+        types.push({ type: 'score', ...this.randomScorePeg(pegVals) });
+      }
+    }
     return types;
+  }
+
+  randomScorePeg(pegVals) {
+    // Weights: T1=30, T2=25, T3=22, T4=15, T5=8
+    const weights = [30, 25, 22, 15, 8];
+    const total = weights.reduce((a, b) => a + b, 0);
+    let roll = Math.random() * total;
+    for (let i = 0; i < weights.length; i++) {
+      roll -= weights[i];
+      if (roll <= 0) return pegVals[i];
+    }
+    return pegVals[0];
   }
 
   placePegs(types) {
@@ -561,10 +622,9 @@ class Pinball extends Phaser.Scene {
     if (this.bumpers) {
       for (const b of this.bumpers) {
         if (b.body) this.matter.world.remove(b.body);
-        b.gfx?.destroy(); b.labelTxt?.destroy(); b.countTxt?.destroy();
+        b.gfx?.destroy(); b.glowGfx?.destroy(); b.labelTxt?.destroy(); b.countTxt?.destroy();
       }
     }
-    const { lockCount } = this.levelParams;
     const ts = { fontFamily: 'monospace', fontStyle: 'bold' };
 
     this.bumpers = defs.map(b => {
@@ -574,39 +634,67 @@ class Pinball extends Phaser.Scene {
       const gfx = this.add.graphics();
       this.drawBumper(gfx, b, false);
 
-      let labelTxt = null, countTxt = null;
-      if (b.type === 'lock') {
-        const left = Math.max(0, lockCount - this.lockHits);
-        countTxt = this.add.text(b.x, b.y - r(4),
-          this.lockUnlocked ? '✓' : `${left}`,
-          { ...ts, fontSize: fs(16), color: '#ffffff' }).setOrigin(0.5).setDepth(4);
-        labelTxt = this.add.text(b.x, b.y + r(11),
-          this.lockUnlocked ? 'OPEN' : 'LOCK',
-          { ...ts, fontSize: fs(7),
-            color: this.lockUnlocked ? '#00ffaa' : '#88ccff' }
-        ).setOrigin(0.5).setDepth(4);
-      } else if (b.type === 'gold') {
+      let labelTxt = null;
+      if (b.type === 'gold') {
         labelTxt = this.add.text(b.x, b.y, 'G',
           { ...ts, fontSize: fs(14), color: '#ffdd44' }).setOrigin(0.5).setDepth(4);
       } else if (b.type === 'damage') {
         labelTxt = this.add.text(b.x, b.y, '!',
           { ...ts, fontSize: fs(16), color: '#ff6666' }).setOrigin(0.5).setDepth(4);
+      } else if (b.type === 'score' && b.tier >= 3) {
+        labelTxt = this.add.text(b.x, b.y, b.tier >= 5 ? '★' : `${b.value}`,
+          { ...ts, fontSize: fs(b.tier >= 5 ? 14 : 11),
+            color: this.scorePegColor(b.tier) }).setOrigin(0.5).setDepth(4);
       }
-      return { body, gfx, labelTxt, countTxt, ...b, flash: 0 };
+      let glowGfx = null;
+      if (b.type === 'score' && b.tier === 5) {
+        glowGfx = this.add.graphics().setDepth(2);
+        glowGfx.lineStyle(r(18), 0xeeffff, 1);
+        glowGfx.strokeCircle(b.x, b.y, b.r + r(5));
+        this.tweens.add({
+          targets: glowGfx,
+          alpha: { from: 0.08, to: 0.45 },
+          duration: 1400,
+          ease: 'Sine.easeInOut',
+          yoyo: true,
+          repeat: -1
+        });
+      }
+      return { body, gfx, glowGfx, labelTxt, countTxt: null, ...b, flash: 0 };
     });
+  }
+
+  scorePegColor(tier) {
+    return ['#446677', '#009977', '#00bb88', '#00ccdd', '#99eeff'][tier - 1] ?? '#446677';
+  }
+
+  scorePegRingColor(tier) {
+    return [0x223344, 0x004433, 0x006644, 0x116688, 0x22aacc][tier - 1] ?? 0x223344;
   }
 
   drawBumper(gfx, b, lit) {
     const disabled = b.disabledUntil && this.time.now < b.disabledUntil;
-    const C = {
-      normal: { bg: lit?0xbb33ff:0x160020, ring: lit?0xdd88ff:0x771199, inner: lit?0xffffff:0x440066 },
-      lock:   { bg: lit?0x44aaff:0x001833, ring: lit?0x88ddff:0x224488, inner: lit?0xffffff:0x112244 },
-      gold:   { bg: lit?0xffdd00:0x1a1000, ring: lit?0xffee88:0x886600, inner: lit?0xffffff:0x443300 },
-      damage: disabled
-        ? { bg: 0x111111, ring: 0x333333, inner: 0x222222 }
-        : { bg: lit?0xff4444:0x220000, ring: lit?0xff9999:0x881111, inner: lit?0xffffff:0x440000 },
-    };
-    const c = C[b.type] || C.normal;
+
+    let c;
+    if (b.type === 'score') {
+      const t = b.tier ?? 1;
+      const tColors = [
+        { bg: lit?0x446677:0x0a1018, ring: lit?0x7799aa:0x223344, inner: lit?0xffffff:0x112233 }, // T1
+        { bg: lit?0x009977:0x000e0c, ring: lit?0x22bb99:0x004433, inner: lit?0xffffff:0x003322 }, // T2
+        { bg: lit?0x00bb88:0x001410, ring: lit?0x33ddbb:0x006644, inner: lit?0xffffff:0x004433 }, // T3
+        { bg: lit?0x00ccdd:0x001420, ring: lit?0x44eeff:0x116688, inner: lit?0xffffff:0x0088aa }, // T4
+        { bg: lit?0x99eeff:0x001520, ring: lit?0xeeffff:0x22aacc, inner: lit?0xffffff:0x66ccee }, // T5
+      ];
+      c = tColors[t - 1] ?? tColors[0];
+    } else {
+      const C = {
+        gold:   { bg: lit?0xffdd00:0x1a1000, ring: lit?0xffee88:0x886600, inner: lit?0xffffff:0x443300 },
+        damage: disabled
+          ? { bg: 0x111111, ring: 0x333333, inner: 0x222222 }
+          : { bg: lit?0xff4444:0x220000, ring: lit?0xff9999:0x881111, inner: lit?0xffffff:0x440000 },
+      };
+      c = C[b.type] ?? { bg: 0x111111, ring: 0x333333, inner: 0x222222 };
+    }
     gfx.clear();
     // outer glow halo
     gfx.lineStyle(r(10), c.ring, 0.10); gfx.strokeCircle(b.x, b.y, b.r);
@@ -630,11 +718,15 @@ class Pinball extends Phaser.Scene {
       return;
     }
     this.gold -= 2;
-    this.goldTxt.setText(`G:${this.gold}`);
+    this.goldTxt.setText(`GOLD  ${this.gold}`);
     this.updateRerollBtn();
 
-    // Keep peg types, randomise positions only
-    const types = this.bumpers.map(b => ({ type: b.type, r: b.r }));
+    // Keep peg types, randomise positions only — preserve tier/value for score pegs
+    const types = this.bumpers.map(b => {
+      const def = { type: b.type, r: b.r };
+      if (b.type === 'score') { def.tier = b.tier; def.value = b.value; }
+      return def;
+    });
     this.buildBumpers(this.placePegs(types));
     this.cameras.main.flash(100, 15, 15, 35);
   }
@@ -666,6 +758,7 @@ class Pinball extends Phaser.Scene {
     ).setOrigin(1, 0.5).setDepth(21);
 
     this.refreshHP();
+    window.updateObjective?.(this.score - this.levelStartScore, getLevelTarget(this.level));
 
     this.rerollBtn = this.add.text(BX2-r(5), sub, '↺ REROLL  -2G', {
       fontSize: fs(11), color: '#55aa55', fontFamily: 'monospace',
@@ -693,8 +786,8 @@ class Pinball extends Phaser.Scene {
   }
 
   refreshHP() {
-    const ballCount = Math.max(1, this.balls.length);
-    window.updateSideHP?.(this.hp, this.maxHP, ballCount);
+    const hps = this.balls.length > 0 ? this.balls.map(b => b.hp) : [this.hp];
+    window.updateSideHP?.(hps, this.maxHP);
     window.updateEquipped?.(this.inventory);
   }
 
@@ -795,24 +888,42 @@ class Pinball extends Phaser.Scene {
   // ─── Popup + particles ────────────────────────────────────────────────────────
 
   showPopup(x, y, label, textColor, tints) {
-    const txt = this.add.text(x, y, label, {
-      fontSize: fs(13), color: textColor, fontFamily: 'monospace', fontStyle: 'bold',
-      stroke: '#000000', strokeThickness: r(3)
-    }).setOrigin(0.5, 1).setDepth(25);
+    const now = this.time.now;
+    // Per-source staggering: key by peg position so each peg is independent
+    const key = Math.round(x) + '_' + Math.round(y);
+    const burst = this.popupBursts.get(key) ?? { index: 0, time: 0 };
+    if (now - burst.time > 300) burst.index = 0;
+    const delay = burst.index * 190;
+    burst.index++;
+    burst.time = now;
+    this.popupBursts.set(key, burst);
+    // Prune stale entries to prevent memory creep
+    if (this.popupBursts.size > 50) {
+      for (const [k, v] of this.popupBursts) {
+        if (now - v.time > 2000) this.popupBursts.delete(k);
+      }
+    }
 
-    this.tweens.add({
-      targets: txt, y: y - r(55), alpha: 0,
-      duration: 900, ease: 'Power2Out',
-      onComplete: () => txt.destroy()
+    this.time.delayedCall(delay, () => {
+      const txt = this.add.text(x, y, label, {
+        fontSize: fs(13), color: textColor, fontFamily: 'monospace', fontStyle: 'bold',
+        stroke: '#000000', strokeThickness: r(3)
+      }).setOrigin(0.5, 1).setDepth(25);
+
+      this.tweens.add({
+        targets: txt, y: y - r(55), alpha: 0,
+        duration: 900, ease: 'Power2Out',
+        onComplete: () => txt.destroy()
+      });
+
+      const mgr = this.add.particles('dot').setDepth(24);
+      mgr.createEmitter({
+        speed: { min: 55, max: 145 }, angle: { min: 0, max: 360 },
+        scale: { start: 0.75, end: 0 }, lifespan: { min: 380, max: 650 },
+        tint: tints, blendMode: 'ADD', gravityY: 280, on: false
+      }).explode(14, x, y);
+      this.time.delayedCall(700, () => mgr.destroy());
     });
-
-    const mgr = this.add.particles('dot').setDepth(24);
-    mgr.createEmitter({
-      speed: { min: 55, max: 145 }, angle: { min: 0, max: 360 },
-      scale: { start: 0.75, end: 0 }, lifespan: { min: 380, max: 650 },
-      tint: tints, blendMode: 'ADD', gravityY: 280, on: false
-    }).explode(14, x, y);
-    this.time.delayedCall(700, () => mgr.destroy());
   }
 
   // Tiny purple burst when a normal peg is hit
@@ -851,7 +962,7 @@ class Pinball extends Phaser.Scene {
     const gfx      = this.add.circle(sx, sy, BALL_R, 0xdde0ff).setDepth(10);
     const ring     = this.add.graphics().setDepth(9);
     const trailGfx = this.add.graphics().setDepth(8);
-    const ball = { body, gfx, ring, trailGfx, trail: [] };
+    const ball = { body, gfx, ring, trailGfx, trail: [], hp: this.hp };
     this.balls.push(ball);
     this.launchBall = ball;
     this.launched = false;
@@ -871,12 +982,13 @@ class Pinball extends Phaser.Scene {
     const gfx      = this.add.circle(sx, sy, BALL_R, 0xdde0ff).setDepth(10);
     const ring     = this.add.graphics().setDepth(9);
     const trailGfx = this.add.graphics().setDepth(7);
-    this.balls.push({ body, gfx, ring, trailGfx, trail: [] });
+    this.balls.push({ body, gfx, ring, trailGfx, trail: [], hp: this.hp });
     this.refreshHP();
   }
 
   drainBall(i) {
     const ball = this.balls[i];
+    if (!ball || !ball.body) return;
     const { x, y } = ball.body.position;
 
     // Pop effect
@@ -940,6 +1052,8 @@ class Pinball extends Phaser.Scene {
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT
     });
     this.shakeReadyAt = 0;
+    this.ballLastMovedAt = 0;
+    this.shakeHintShown = false;
   }
 
   // ─── Collisions ───────────────────────────────────────────────────────────────
@@ -952,7 +1066,7 @@ class Pinball extends Phaser.Scene {
         const bumper = bodyA.label==='bumper' ? bodyA : bodyB.label==='bumper' ? bodyB : null;
         const surf   = bodyA.label==='wall' || bodyA.label==='flipper' ? bodyA
                      : bodyB.label==='wall' || bodyB.label==='flipper' ? bodyB : null;
-        if (ball && bumper) { this.hitBumper(bumper); continue; }
+        if (ball && bumper) { this.hitBumper(bumper, ball); continue; }
         if (ball && surf) {
           const c = pair.activeContacts?.[0]?.vertex ?? ball.position;
           this.contactSpark(c.x, c.y);
@@ -961,28 +1075,40 @@ class Pinball extends Phaser.Scene {
     });
   }
 
-  hitBumper(bumperBody) {
-    const b = this.bumpers.find(b => b.body === bumperBody);
+  hitBumper(bumperBody, ballBody) {
+    const b    = this.bumpers.find(b => b.body === bumperBody);
     if (!b) return;
+    const ball = this.balls.find(bl => bl.body === ballBody) ?? null;
     b.flash = 10;
 
     switch (b.type) {
-      case 'normal':
-        this.score += 100;
-        this.scoreTxt.setText(`SCORE  ${this.score}`);
+      case 'score': {
+        const tier   = b.tier ?? 1;
+        const gained = b.value ?? this.levelParams.pegVals[tier - 1]?.value ?? 0;
+        this.score += gained;
         this.pegPop(b.x, b.y);
+        const popTints = [
+          [0x446677, 0x7799aa, 0xffffff],
+          [0x009977, 0x22bb99, 0xffffff],
+          [0x00bb88, 0x33ddbb, 0xffffff],
+          [0x00ccdd, 0x44eeff, 0xffffff],
+          [0x99eeff, 0xeeffff, 0xffffff],
+        ];
+        this.showPopup(b.x, b.y - b.r, `+${gained}`, this.scorePegColor(tier), popTints[tier - 1] ?? popTints[0]);
+        this.checkLevelProgress();
         break;
+      }
 
       case 'gold':
         this.gold++;
         this.score += 50;
-        this.goldTxt.setText(`G:${this.gold}`);
-        this.scoreTxt.setText(`SCORE  ${this.score}`);
         this.updateRerollBtn();
         this.showPopup(b.x, b.y - b.r, '+1 GOLD', '#ffee55', [0xffdd00, 0xffaa00, 0xffffff]);
+        this.checkLevelProgress();
         break;
 
       case 'damage':
+        if (!ball) break;
         if (b.disabledUntil && this.time.now < b.disabledUntil) break;
         if (this.shieldHP > 0) {
           this.shieldHP--;
@@ -990,45 +1116,51 @@ class Pinball extends Phaser.Scene {
           this.shieldRechargeTimer = this.time.delayedCall(5000, () => {
             this.shieldHP = 1;
             this.shieldRechargeTimer = null;
-            this.showPopup(
-              this.ballBody?.position.x ?? W/2,
-              (this.ballBody?.position.y ?? H/2) - r(20),
-              'SHIELD READY', '#44aaff', [0x2277ff, 0x44ccff, 0xffffff]
-            );
+            if (this.balls.length > 0) {
+              const { x, y } = this.balls[0].body.position;
+              this.showPopup(x, y - r(20), 'SHIELD READY', '#44aaff', [0x2277ff, 0x44ccff, 0xffffff]);
+            }
           });
           this.showPopup(b.x, b.y - b.r, 'BLOCKED!', '#44aaff', [0x2277ff, 0x44ccff, 0xffffff]);
         } else {
-          this.hp = Math.max(0, this.hp - 1);
+          ball.hp = Math.max(0, ball.hp - 1);
           this.refreshHP();
           this.showPopup(b.x, b.y - b.r, '-1 HP', '#ff6666', [0xff2222, 0xff6600, 0xff0066]);
-          if (this.hp <= 0) this.time.delayedCall(200, () => { for (let i = this.balls.length-1; i >= 0; i--) this.drainBall(i); });
+          if (ball.hp <= 0) {
+            this.time.delayedCall(200, () => {
+              const idx = this.balls.indexOf(ball);
+              if (idx !== -1) this.drainBall(idx);
+            });
+          }
         }
         break;
-
-      case 'lock': {
-        if (this.lockUnlocked) break;
-        this.lockHits++;
-        const left = this.levelParams.lockCount - this.lockHits;
-        if (b.countTxt) b.countTxt.setText(left > 0 ? `${left}` : '✓');
-        if (left <= 0) this.unlockTop(b);
-        break;
-      }
     }
     fireHook(this, 'onBumperHit', b);
   }
 
+  // ─── Score-based level progress ───────────────────────────────────────────────
+
+  checkLevelProgress() {
+    const target     = getLevelTarget(this.level);
+    const levelScore = this.score - this.levelStartScore;
+    this.scoreTxt.setText(`SCORE  ${this.score}`);
+    this.goldTxt.setText(`GOLD  ${this.gold}`);
+    window.updateObjective?.(levelScore, target);
+    if (!this.lockUnlocked && levelScore >= target) {
+      this.unlockTop();
+    }
+  }
+
   // ─── Unlock top barrier ───────────────────────────────────────────────────────
 
-  unlockTop(lockBumper) {
+  unlockTop() {
     if (this.lockUnlocked) return;
     this.lockUnlocked = true;
 
     if (this.topWall) { this.matter.world.remove(this.topWall); this.topWall = null; }
     this.topBorderGfx.setVisible(false);
 
-    if (lockBumper?.labelTxt) lockBumper.labelTxt.setText('OPEN').setColor('#00ffaa');
-
-    // Particle rain — toned-down burst when barrier opens
+    // Burst of particles from the top when it opens
     const rainMgr = this.add.particles('dot').setDepth(15);
     const rainEmitter = rainMgr.createEmitter({
       x:        { min: BX1 + 10, max: BX2 - 10 },
@@ -1037,18 +1169,15 @@ class Pinball extends Phaser.Scene {
       speedY:   { min: 50,  max: 180 },
       scale:    { start: 0.6, end: 0 },
       lifespan: { min: 800, max: 1800 },
-      tint:     [0x00ffaa, 0x44ffdd, 0x00ff44, 0x88ffcc],
-      blendMode: 'ADD',
-      gravityY:  180,
-      frequency: 25,
-      quantity:  2
+      tint:     [0x00ffaa, 0x44eeff, 0x00ccdd, 0x88ffcc],
+      blendMode: 'ADD', gravityY: 180, frequency: 25, quantity: 2
     });
     this.time.delayedCall(1200, () => {
       rainEmitter.stop();
       this.time.delayedCall(1000, () => rainMgr.destroy());
     });
 
-    // Persistent faint guide particles — slow drift downward so player knows to go up
+    // Faint guide particles drifting down from the opening
     const guideMgr = this.add.particles('dot').setDepth(14);
     guideMgr.createEmitter({
       x:        { min: BX1 + 8, max: BX2 - 8 },
@@ -1059,67 +1188,60 @@ class Pinball extends Phaser.Scene {
       alpha:    { start: 0.32, end: 0 },
       lifespan: { min: 5600, max: 11000 },
       tint:     [0x00ffaa, 0x44ffee, 0x88ffcc],
-      blendMode: 'ADD',
-      gravityY:  30,
-      frequency: 60,
-      quantity:  1
+      blendMode: 'ADD', gravityY: 30, frequency: 60, quantity: 1
     });
-    this.guideMgr = guideMgr;   // kept alive until scene ends
+    this.guideMgr = guideMgr;
 
-    // Golden glow from the top opening
+    // Golden glow from the opening
     const glowGfx = this.add.graphics().setDepth(13).setAlpha(0.3);
     glowGfx.fillGradientStyle(0xffcc00, 0xffcc00, 0xffcc00, 0xffcc00, 0.08, 0.08, 0, 0);
     glowGfx.fillRect(BX1, BY1, BX2 - BX1, r(160));
     this.tweens.add({ targets: glowGfx, alpha: 1, duration: 2200, ease: 'Sine.easeInOut', yoyo: true, repeat: -1 });
 
-    // Hint text
-    const hint = this.add.text(W/2, BY1 + r(14), '▲  ESCAPE  ▲', {
-      fontSize: fs(11), color: '#00ffaa', fontFamily: 'monospace'
+    const hint = this.add.text(W/2, BY1 + r(35), '▲  ESCAPE  ▲', {
+      fontSize: fs(22), color: '#00ffaa', fontFamily: 'monospace', fontStyle: 'bold',
+      stroke: '#003322', strokeThickness: r(4)
     }).setOrigin(0.5).setDepth(25);
-    this.time.delayedCall(3000, () => hint.destroy());
+    this.tweens.add({ targets: hint, alpha: { from: 0.6, to: 1 }, duration: 700, ease: 'Sine.easeInOut', yoyo: true, repeat: -1 });
+    this.escapeHint = hint;
   }
 
   // ─── Next level ───────────────────────────────────────────────────────────────
 
   nextLevel() {
-    // Escape rain — gold/white shower from the top barrier
-    const escapeMgr = this.add.particles('dot').setDepth(15);
-    const escapeEmitter = escapeMgr.createEmitter({
-      x:        { min: BX1 + 10, max: BX2 - 10 },
-      y:        BY1,
-      speedX:   { min: -30, max: 30 },
-      speedY:   { min: 60,  max: 220 },
-      scale:    { start: 0.8, end: 0 },
-      lifespan: { min: 500, max: 1100 },
-      tint:     [0xffee44, 0xffffff, 0xffdd00, 0xffcc88],
-      blendMode: 'ADD',
-      gravityY:  160,
-      frequency: 18,
-      quantity:  3
-    });
-    this.time.delayedCall(1000, () => {
-      escapeEmitter.stop();
-      this.time.delayedCall(1200, () => escapeMgr.destroy());
-    });
+    if (this.escapeHint) { this.escapeHint.destroy(); this.escapeHint = null; }
+    // Level clear celebration burst
+    const burst = this.add.particles('dot').setDepth(28);
+    burst.createEmitter({
+      x: { min: BX1 + 20, max: BX2 - 20 },
+      y: { min: r(200), max: r(500) },
+      speed: { min: 80, max: 300 },
+      angle: { min: 0, max: 360 },
+      scale: { start: 0.9, end: 0 },
+      lifespan: { min: 400, max: 1100 },
+      tint: [0x00ffaa, 0x44eeff, 0xffee44, 0xffffff, 0x00ccdd],
+      blendMode: 'ADD', gravityY: 120, on: false
+    }).explode(50, W / 2, H / 2);
+    this.time.delayedCall(1200, () => burst.destroy());
 
-    // Remove ball immediately
-    if (this.ballBody) {
-      this.matter.world.remove(this.ballBody);
-      this.ballGfx.destroy(); this.ballRing.destroy();
-      this.ballBody = null;
-      this.trail = []; this.trailGfx.clear();
+    // Clean up all balls
+    for (const ball of this.balls) {
+      this.matter.world.remove(ball.body);
+      ball.gfx.destroy(); ball.ring.destroy(); ball.trailGfx.destroy();
     }
+    this.balls = [];
 
     const ox = W/2, oy = H/2 - r(60);
     this.add.rectangle(ox, oy, r(310), r(80), 0x040408, 0.96).setDepth(30);
-    this.add.text(ox, oy - r(14), `LEVEL  ${this.level + 1}`, {
+    this.add.text(ox, oy - r(14), `LEVEL  ${this.level}  CLEAR`, {
       fontSize: fs(26), color: '#00ffaa', fontFamily: 'monospace', fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(31);
-    this.add.text(ox, oy + r(16), 'ENTERING NEXT ROOM . . .', {
-      fontSize: fs(10), color: '#336655', fontFamily: 'monospace'
+    this.add.text(ox, oy + r(16), 'HEADING TO THE SHOP . . .', {
+      fontSize: fs(10), color: '#aa8800', fontFamily: 'monospace'
     }).setOrigin(0.5).setDepth(31);
 
-    fireHook(this, 'onLevelClear');  // items may modify ballsLeft before we pass it
+    this.gold += 5;
+    fireHook(this, 'onLevelClear');
     this.time.delayedCall(1400, () => {
       this.scene.start('Shop', {
         level:     this.level + 1,
@@ -1165,6 +1287,58 @@ class Pinball extends Phaser.Scene {
         });
       }
       this.cameras.main.shake(140, 0.007);
+      this.ballLastMovedAt = time;
+      this.shakeHintShown = false;
+      if (this.shakeHint) { this.shakeHint.destroy(); this.shakeHint = null; }
+    }
+
+    // Stuck ball hint — if any ball has barely moved for 4 seconds, nudge the player
+    if (this.launched && this.balls.length > 0) {
+      const anyMoving = this.balls.some(bl => {
+        const v = bl.body.velocity;
+        return Math.abs(v.x) > 0.5 * S || Math.abs(v.y) > 0.5 * S;
+      });
+      if (anyMoving) {
+        this.ballLastMovedAt = time;
+        this.shakeHintShown = false;
+        if (this.shakeHint) {
+          this.tweens.killTweensOf(this.shakeHint);
+          this.tweens.add({ targets: this.shakeHint, alpha: 0, duration: 200, onComplete: () => { this.shakeHint?.destroy(); this.shakeHint = null; } });
+        }
+      } else if (!this.shakeHintShown && time - this.ballLastMovedAt > 4000) {
+        this.shakeHintShown = true;
+        // Faint hint — show at center of lowest stuck ball
+        const lowest = this.balls.reduce((a, b) => (b.body.position.y > a.body.position.y ? b : a));
+        const hx = lowest.body.position.x, hy = lowest.body.position.y - r(20);
+        const hintY = hy - r(30);
+        const hint = this.add.text(hx, hintY, 'SHIFT to shake', {
+          fontSize: fs(10), color: '#aaaaaa', fontFamily: 'monospace', fontStyle: 'italic',
+          stroke: '#000000', strokeThickness: r(2), alpha: 0
+        }).setOrigin(0.5, 1).setDepth(25);
+        this.shakeHint = hint;
+        // Start shaking immediately, fade in at the same time
+        this.tweens.add({
+          targets: hint, alpha: 0.55,
+          duration: 400, ease: 'Power2Out'
+        });
+        const doShake = () => {
+          if (!this.shakeHint) return;
+          this.tweens.add({
+            targets: hint, x: { from: hx - r(1.2), to: hx + r(1.2) },
+            duration: 110, ease: 'Stepped', easeParams: [3], yoyo: true, repeat: 2,
+            onComplete: () => {
+              if (!this.shakeHint) return;
+              hint.x = hx;
+              this.time.delayedCall(900, doShake);
+            }
+          });
+        };
+        doShake();
+      }
+    } else {
+      this.ballLastMovedAt = time;
+      this.shakeHintShown = false;
+      if (this.shakeHint) { this.shakeHint.destroy(); this.shakeHint = null; }
     }
 
     const lActive = k.left.isDown  || k.a.isDown;
@@ -1222,7 +1396,9 @@ class Pinball extends Phaser.Scene {
 
     // All balls — unified loop
     for (let i = this.balls.length - 1; i >= 0; i--) {
+      if (this.levelComplete) break;
       const ball = this.balls[i];
+      if (!ball || !ball.body) continue;
       const { x, y } = ball.body.position;
 
       // Trail
@@ -1254,10 +1430,12 @@ class Pinball extends Phaser.Scene {
       // Drain
       if (y > H + 30) { this.drainBall(i); continue; }
 
-      // Level complete
+      // Level complete — ball escaped through the top
       if (this.launched && this.lockUnlocked && !this.levelComplete && y < BY1 - 20) {
         this.levelComplete = true; this.nextLevel();
       }
+
+      // Level complete
     }
 
     for (const b of this.bumpers) {
@@ -1296,17 +1474,42 @@ class Shop extends Phaser.Scene {
   }
 
   create() {
-    const { bg } = getBgColors(this.level);
-    this.add.rectangle(W/2, H/2, W, H, bg);
+    window.updateObjective?.(0, 0);   // clear objective — not relevant in shop
+    window.updateEquipped?.(this.inventory);
+    window.updateSideHP?.([this.hp], this.maxHP);
+
+    this.add.rectangle(W/2, H/2, W, H, 0x0d0a00);
 
     const ts = { fontFamily: 'monospace', fontStyle: 'bold' };
 
-    // Grid overlay (matches pinball bg style)
-    const gc = getBgColors(this.level).grid;
+    // Grid overlay — gold tint to match shop feel
+    const gc = 0x1a1400;
     const g = this.add.graphics();
     g.lineStyle(1, gc, 1);
     for (let x = 0; x <= W; x += r(30)) g.lineBetween(x, 0, x, H);
     for (let y = 0; y <= H; y += r(30)) g.lineBetween(0, y, W, y);
+
+    // Gold particle rain
+    if (!this.textures.exists('dot')) {
+      const dg = this.add.graphics();
+      dg.fillStyle(0xffffff); dg.fillCircle(4, 4, 4);
+      dg.generateTexture('dot', 8, 8); dg.destroy();
+    }
+    // Gold particles drifting in slowly from both sides
+    const shopParts = this.add.particles('dot');
+    const sideConfig = (fromLeft) => ({
+      x: fromLeft ? 0 : W,
+      y: { min: 0, max: H },
+      speedX: fromLeft ? { min: 20, max: 60 } : { min: -60, max: -20 },
+      speedY: { min: -5, max: 5 },
+      scale:  { start: 0.5, end: 0 },
+      alpha:  { start: 0.4, end: 0 },
+      lifespan: { min: 5000, max: 9000 },
+      tint:   [0xffdd00, 0xffcc44, 0xffee88, 0xffbb00],
+      blendMode: 'ADD', gravityY: 0, frequency: 150, quantity: 1,
+    });
+    shopParts.createEmitter(sideConfig(true));
+    shopParts.createEmitter(sideConfig(false));
 
     this.add.rectangle(W/2, r(18), W, r(36), 0x040408).setDepth(10);
     this.add.text(W/2, r(18), `SCORE  ${this.score}  |  L:${this.level}  |  B:${this.ballsLeft}`, {
@@ -1343,6 +1546,7 @@ class Shop extends Phaser.Scene {
         this.goldTxt.setText(`GOLD:  ${this.gold}`);
         this.statsTxt.setText(this.statsStr());
         this.itemBtns.forEach(b => this.refreshItem(b));
+        window.updateEquipped?.(this.inventory);
       });
       panel.add(btn);
       col++;
@@ -1395,7 +1599,7 @@ class Shop extends Phaser.Scene {
   buildItem(item, i) {
     const y = r(230) + i * r(98);
     const rar = RARITY[item.rarity] ?? RARITY.common;
-    const box = this.add.rectangle(W/2, y, r(300), r(82), 0x08080e)
+    const box = this.add.rectangle(W/2, y, r(300), r(82), 0x08080e, 0.6)
       .setStrokeStyle(r(3), rar.color).setInteractive({ useHandCursor: true });
 
     const rarTxt = this.add.text(W/2, y - r(30), rar.label, {
@@ -1414,8 +1618,8 @@ class Shop extends Phaser.Scene {
       fontFamily: 'monospace', fontStyle: 'bold', fontSize: fs(13), color: '#ccaa00'
     }).setOrigin(0.5);
 
-    box.on('pointerover',  () => { if (this.gold >= item.cost) box.setFillStyle(0x0d1020); });
-    box.on('pointerout',   () => box.setFillStyle(0x08080e));
+    box.on('pointerover',  () => { const c = this.inventory.filter(k => k === item.key).length; if (this.gold >= stackedCost(item, c)) box.setFillStyle(0x0d1020, 0.75); });
+    box.on('pointerout',   () => box.setFillStyle(0x08080e, 0.6));
     box.on('pointerdown',  () => this.buyItem(item));
 
     const btn = { item, box, lbl, rarTxt, desc, costTxt };
@@ -1427,7 +1631,8 @@ class Shop extends Phaser.Scene {
     const count = this.inventory.filter(k => k === item.key).length;
     const max   = item.maxStack ?? Infinity;
     if (count >= max && max !== Infinity) return;
-    if (this.gold < item.cost) {
+    const cost = stackedCost(item, count);
+    if (this.gold < cost) {
       const btn = this.itemBtns.find(b => b.item === item);
       if (btn) this.tweens.add({
         targets: btn.box, x: { from: btn.box.x - r(7), to: btn.box.x },
@@ -1435,28 +1640,30 @@ class Shop extends Phaser.Scene {
       });
       return;
     }
-    this.gold -= item.cost;
-    this.inventory.push(item.key);
+    this.gold -= cost;
+    if (!item.transient) this.inventory.push(item.key);
     item.onBuy?.(this);
     this.goldTxt.setText(`GOLD:  ${this.gold}`);
     this.statsTxt.setText(this.statsStr());
     this.cameras.main.flash(100, 10, 25, 8);
     this.itemBtns.forEach(b => this.refreshItem(b));
+    window.updateEquipped?.(this.inventory);
   }
 
   refreshItem({ item, box, lbl, rarTxt, costTxt }) {
     const count  = this.inventory.filter(k => k === item.key).length;
     const max    = item.maxStack ?? Infinity;
     const maxed  = max !== Infinity && count >= max;
-    const ok     = !maxed && this.gold >= item.cost;
+    const cost   = stackedCost(item, count);
+    const ok     = !maxed && this.gold >= cost;
     const rar    = RARITY[item.rarity] ?? RARITY.common;
     const alpha  = maxed ? 0.4 : ok ? 1.0 : 0.3;
     lbl.setAlpha(alpha);
     rarTxt.setAlpha(alpha);
     let costStr;
-    if (maxed)               costStr = 'MAXED';
-    else if (count > 0 && max !== Infinity) costStr = `Lv${count + 1}  ${item.cost}G`;
-    else                     costStr = `${item.cost} G`;
+    if (maxed)          costStr = 'MAXED';
+    else if (count > 0) costStr = `Lv${count + 1}  ${cost}G`;
+    else                costStr = `${cost} G`;
     costTxt.setText(costStr);
     costTxt.setAlpha(maxed ? 0.35 : ok ? 1.0 : 0.3);
     box.setStrokeStyle(r(3), maxed ? 0x1a1a1a : rar.color, maxed ? 0.3 : ok ? 1.0 : 0.4);
