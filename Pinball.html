@@ -1,0 +1,1529 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Pinball</title>
+  <style>
+    body { margin: 0; background: #060610; overflow: hidden; }
+    .side-panel {
+      position: fixed;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      pointer-events: none;
+      white-space: nowrap;
+      font-family: monospace;
+    }
+    #side-hp { font-size: 13px; line-height: 2; }
+    #side-hp .hp-label  { color: #663333; font-size: 10px; letter-spacing: 1px; }
+    #side-hp .hp-filled { color: #cc3333; }
+    #side-hp .hp-empty  { color: #2a1a1a; }
+    #equipped-items { font-size: 12px; line-height: 1.9; color: #3a4a66; }
+    #equipped-items h3 { margin: 0 0 5px 0; font-size: 10px; color: #2a3a55; letter-spacing: 2px; }
+    #instructions { font-size: 13px; line-height: 1.9; color: #3a4a66; }
+    #instructions h3 { margin: 0 0 6px 0; font-size: 11px; color: #2a3a55; letter-spacing: 2px; }
+    .sep { border: none; border-top: 1px solid #1a2233; margin: 8px 0; }
+    .c-purple { color: #aa55ff; } .c-gold { color: #ccaa00; }
+    .c-red    { color: #cc3333; } .c-blue { color: #4488cc; }
+    .c-green  { color: #44aa66; } .c-dim  { color: #2a3a55; }
+  </style>
+</head>
+<body>
+<div id="left-panel" class="side-panel">
+  <div id="side-hp"></div>
+  <div id="equipped-items"><h3>EQUIPPED</h3><span class="c-dim">— none —</span></div>
+</div>
+<div id="right-panel" class="side-panel">
+<div id="instructions">
+  <h3>CONTROLS</h3>
+  <div><span class="c-green">SPACE</span>       launch ball</div>
+  <div><span class="c-green">A / ←</span>       left flipper</div>
+  <div><span class="c-green">D / →</span>       right flipper</div>
+  <div><span class="c-green">SHIFT</span>       shake board</div>
+  <hr class="sep">
+  <h3>PEGS</h3>
+  <div><span class="c-purple">●</span> purple   +score</div>
+  <div><span class="c-gold">●</span> gold     +gold</div>
+  <div><span class="c-red">●</span> red      -1 HP</div>
+  <div><span class="c-blue">●</span> blue     lock — hit to open</div>
+  <hr class="sep">
+  <h3>GOAL</h3>
+  <div>Hit the <span class="c-blue">lock</span> enough times</div>
+  <div>to open the top barrier,</div>
+  <div>then shoot the ball through.</div>
+  <hr class="sep">
+  <div class="c-dim">↺ REROLL pegs  -2G</div>
+  <div class="c-dim">Shop between levels</div>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+<script>
+'use strict';
+
+// Render at native screen resolution — no CSS upscaling, no blur.
+const S      = Math.min(window.innerWidth / 480, window.innerHeight / 680);
+const W = Math.round(480 * S), H = Math.round(680 * S);
+const r = n => Math.round(n * S);          // scale a pixel value
+const fs = n => `${Math.round(n * S)}px`;  // scale a font size string
+
+const MBody = Phaser.Physics.Matter.Matter.Body;
+
+// Position side panels around the canvas
+(function() {
+  const canvasLeft  = (window.innerWidth - W) / 2;
+  const canvasRight = (window.innerWidth + W) / 2;
+  const spaceLeft   = canvasLeft;
+  const spaceRight  = window.innerWidth - canvasRight;
+  const lp = document.getElementById('left-panel');
+  const rp = document.getElementById('right-panel');
+  if (spaceLeft > 120) {
+    lp.style.right = (window.innerWidth - canvasLeft + Math.min(spaceLeft * 0.1, 20)) + 'px';
+  } else { lp.style.display = 'none'; }
+  if (spaceRight > 120) {
+    rp.style.left = (canvasRight + Math.min(spaceRight * 0.1, 20)) + 'px';
+  } else { rp.style.display = 'none'; }
+})();
+
+window.updateSideHP = function(hp, maxHP, ballCount) {
+  const el = document.getElementById('side-hp');
+  if (!el) return;
+  let html = '';
+  for (let i = 0; i < ballCount; i++) {
+    html += '<div><span class="hp-label">HP  </span>';
+    html += '<span class="hp-filled">' + '█'.repeat(hp) + '</span>';
+    html += '<span class="hp-empty">'  + '░'.repeat(Math.max(0, maxHP - hp)) + '</span></div>';
+  }
+  el.innerHTML = html;
+};
+
+window.updateEquipped = function(inventory) {
+  const el = document.getElementById('equipped-items');
+  if (!el) return;
+  const counts = {};
+  for (const key of inventory) counts[key] = (counts[key] || 0) + 1;
+  const entries = Object.entries(counts);
+  if (!entries.length) {
+    el.innerHTML = '<h3>EQUIPPED</h3><span style="color:#1a2233">— none —</span>';
+    return;
+  }
+  let html = '<h3>EQUIPPED</h3>';
+  for (const [key, count] of entries) {
+    const item = ITEMS[key];
+    if (!item) continue;
+    const rar = RARITY[item.rarity] ?? RARITY.common;
+    html += `<div><span style="color:${rar.hex}">●</span> <span style="color:${item.color}">${item.label}</span>`;
+    if (count > 1) html += ` <span style="color:#445566">×${count}</span>`;
+    html += '</div>';
+  }
+  el.innerHTML = html;
+};
+
+const SUBSTEPS   = 3;
+const GRAVITY    = 0.9 * S;
+const MAX_BALL_V = 16 * S;
+const BALL_R     = r(10);
+
+const BX1 = r(40), BX2 = r(440), BY1 = r(28);
+const FL  = r(82),  FH  = r(13),  FA = 0.50;
+const LP  = { x: r(152), y: r(590) };
+const RP  = { x: r(328), y: r(590) };
+// Mid flippers — smaller, ~halfway up the board
+const FL2 = r(56), FH2 = r(11);
+const LP2 = { x: r(40),  y: r(320) };
+const RP2 = { x: r(440), y: r(320) };
+const L_REST = FA,           L_ACTIVE = -FA;
+const R_REST = Math.PI - FA, R_ACTIVE =  Math.PI + FA;
+
+// ─── Level scaling ────────────────────────────────────────────────────────────
+// All values derived from the level number — no hardcoded layouts.
+
+function getLevelParams(level) {
+  return {
+    // Hits needed to open the lock; grows with level
+    lockCount:   Math.min(3 + Math.floor(level * 0.7), 8),
+    // Chance a filler peg becomes gold instead of normal (purple)
+    goldChance:  Math.min(0.12 + level * 0.06, 0.65),
+    // Damage pegs: none on L1, +1 per level up to 5
+    damageCount: Math.max(0, Math.min(level - 1, 5)),
+    // Total bumpers on the board (includes lock + guaranteed gold)
+    pegCount:    Math.min(4 + level, 11),
+  };
+}
+
+function getBgColors(level) {
+  const themes = [
+    { bg: 0x060610, grid: 0x0c0c20 },
+    { bg: 0x0e0614, grid: 0x180a20 },
+    { bg: 0x030d06, grid: 0x071509 },
+    { bg: 0x0d0a03, grid: 0x181205 },
+    { bg: 0x0d0306, grid: 0x200508 },
+    { bg: 0x03090d, grid: 0x051218 },
+  ];
+  return themes[(level - 1) % themes.length];
+}
+
+// ─── Item Registry ────────────────────────────────────────────────────────────
+// To add a new item: one registerItem({...}) call. Nothing else needed.
+//
+// Hooks available (all optional):
+//   onBuy(shopScene)        — fires immediately when purchased in the shop
+//   onApply(gameScene)      — fires each level start for every owned item
+//   onBallSpawn(gameScene)  — fires each time a new ball is spawned
+//   onBumperHit(gameScene, bumperDef) — fires on every bumper collision
+//   onBallDrain(gameScene)  — fires when the ball drains
+//   onLevelClear(gameScene) — fires when the player escapes to the next level
+//
+// Item shape:
+//   key       — unique string identifier
+//   label     — display name
+//   desc      — one-line description shown in shop
+//   cost      — gold price
+//   color     — CSS hex color for shop card
+//   rarity    — 'common' | 'uncommon' | 'rare' (cosmetic for now)
+//   always    — if true, always offered in shop (consumables)
+//   oneTime   — if true, can only be owned once; excluded from pool after purchase
+
+const RARITY = {
+  common:    { label: 'COMMON',    color: 0x667788, hex: '#667788' },
+  uncommon:  { label: 'UNCOMMON',  color: 0x44aa66, hex: '#44aa66' },
+  rare:      { label: 'RARE',      color: 0x4477ff, hex: '#4477ff' },
+  legendary: { label: 'LEGENDARY', color: 0xff8800, hex: '#ff8800' },
+};
+
+const ITEMS = {};
+const registerItem = def => { ITEMS[def.key] = def; };
+const fireHook = (scene, hook, ...args) => {
+  const counts = {};
+  for (const key of scene.inventory) counts[key] = (counts[key] || 0) + 1;
+  for (const [key, count] of Object.entries(counts))
+    ITEMS[key]?.[hook]?.(scene, count, ...args);
+};
+
+registerItem({
+  key: 'plusBall', label: '+1 Ball', desc: 'One extra ball per purchase',
+  cost: 3, color: '#44aa44', rarity: 'common', maxStack: Infinity,
+  onBuy: s => { s.ballsLeft++; },
+});
+
+registerItem({
+  key: 'plusMaxHP', label: '+1 Max HP', desc: 'Permanently expand your max health',
+  cost: 5, color: '#cc4444', rarity: 'common', maxStack: 8,
+  onBuy: s => { s.maxHP++; s.hp = s.maxHP; },
+});
+
+registerItem({
+  key: 'bouncyPaddles', label: 'Bouncy Paddles', desc: 'Flippers launch harder — stacks increase power',
+  cost: 5, color: '#3388ff', rarity: 'common', maxStack: 4,
+  onApply: (s, count) => {
+    const res = Math.min(count * 0.275, 1.0);
+    if (s.lFlipBody)  s.lFlipBody.restitution  = res;
+    if (s.rFlipBody)  s.rFlipBody.restitution  = res;
+    if (s.lFlipBody2) s.lFlipBody2.restitution = res;
+    if (s.rFlipBody2) s.rFlipBody2.restitution = res;
+  },
+});
+
+registerItem({
+  key: 'midFlippers', label: 'Mid Flippers', desc: 'A second smaller set of paddles mid-board',
+  cost: 8, color: '#4488cc', rarity: 'uncommon', maxStack: 1,
+});
+
+registerItem({
+  key: 'goldNugget', label: 'Gold Nugget', desc: 'Purple pegs have a chance to drop gold — stacks raise chance',
+  cost: 6, color: '#ddaa00', rarity: 'uncommon', maxStack: 4,
+  onBumperHit: (s, count, b) => {
+    if (b.type === 'normal' && Math.random() < count * 0.25) {
+      s.gold++;
+      s.goldTxt.setText(`G:${s.gold}`);
+      s.updateRerollBtn();
+      s.showPopup(b.x, b.y - b.r, '+1 GOLD', '#ffee55', [0xffdd00, 0xffaa00, 0xffffff]);
+    }
+  },
+});
+
+registerItem({
+  key: 'bonusOnClear', label: 'Bonus Clear', desc: '+1 ball per stack when you clear a level',
+  cost: 6, color: '#aa44cc', rarity: 'rare', maxStack: 4,
+  onLevelClear: (s, count) => { s.ballsLeft += count; },
+});
+
+registerItem({
+  key: 'shieldedBall', label: 'Shielded Ball', desc: 'Absorbs damage hits — stacks add more charges',
+  cost: 7, color: '#44aaff', rarity: 'rare', maxStack: 3,
+  onBallSpawn: (s, count) => { s.shieldHP = count; },
+});
+
+registerItem({
+  key: 'staticShock', label: 'Static Shock', desc: 'Zaps nearby pegs on hit — stacks raise chance & range',
+  cost: 8, color: '#55ccff', rarity: 'rare', maxStack: 4,
+  onBumperHit: (s, count, b) => {
+    const chance = 0.3 + count * 0.1;           // 40% → 70%
+    const ZAP_R  = r(80 + count * 20);           // r(100) → r(160)
+    if (s._zapChain || Math.random() > chance) return;
+    const targets = s.bumpers
+      .filter(o => o !== b && Phaser.Math.Distance.Between(b.x, b.y, o.x, o.y) < ZAP_R)
+      .sort(() => Math.random() - 0.5).slice(0, 2);
+    if (!targets.length) return;
+    s._zapChain = true;
+    for (const t of targets) {
+      const gfx = s.add.graphics().setDepth(23);
+      gfx.lineStyle(r(2), 0x44ccff, 1.0);
+      const mx = (b.x + t.x) / 2 + Phaser.Math.Between(-r(12), r(12));
+      const my = (b.y + t.y) / 2 + Phaser.Math.Between(-r(12), r(12));
+      gfx.beginPath(); gfx.moveTo(b.x, b.y); gfx.lineTo(mx, my); gfx.lineTo(t.x, t.y); gfx.strokePath();
+      s.tweens.add({ targets: gfx, alpha: 0, duration: 180, onComplete: () => gfx.destroy() });
+      const m = s.add.particles('dot').setDepth(22);
+      m.createEmitter({ speed:{min:r(25),max:r(80)}, angle:{min:0,max:360}, scale:{start:0.45,end:0},
+        lifespan:{min:120,max:280}, tint:[0x44ccff,0x88eeff,0xffffff], blendMode:'ADD', gravityY:0, on:false
+      }).explode(6, t.x, t.y);
+      s.time.delayedCall(320, () => m.destroy());
+      s.showPopup(t.x, t.y - t.r, 'SHOCK!', '#44ccff', [0x44ccff, 0x88eeff, 0xffffff]);
+      s.hitBumper(t.body);
+    }
+    s._zapChain = false;
+  },
+});
+
+registerItem({
+  key: 'redStopper', label: 'Red Stopper', desc: 'Disables damage pegs — stacks add +1s each (max 5s)',
+  cost: 5, color: '#ff4444', rarity: 'uncommon', maxStack: 5,
+  onBumperHit: (s, count, b) => {
+    if (b.type !== 'damage') return;
+    const duration = count * 500;
+    b.disabledUntil = s.time.now + duration;
+    s.drawBumper(b.gfx, b, false);
+    s.showPopup(b.x, b.y - b.r, 'STOPPED', '#ff4444', [0xff2222, 0xff6666, 0xffffff]);
+    s.time.delayedCall(duration, () => {
+      if (b.disabledUntil <= s.time.now) {
+        b.disabledUntil = 0;
+        s.drawBumper(b.gfx, b, false);
+      }
+    });
+  },
+});
+
+registerItem({
+  key: 'multiHit', label: 'Multi Hit', desc: 'Each peg hit has a chance to trigger twice — stacks add +15%',
+  cost: 7, color: '#ffaa44', rarity: 'uncommon', maxStack: 5,
+  onBumperHit: (s, count, b) => {
+    if (s._multiHitChain) return;
+    if (Math.random() < Math.min(count * 0.15, 0.75)) {
+      s._multiHitChain = true;
+      s.hitBumper(b.body);
+      s._multiHitChain = false;
+    }
+  },
+});
+
+registerItem({
+  key: 'multiball', label: 'Multiball', desc: 'Extra ball per stack launches on each turn',
+  cost: 10, color: '#ff88cc', rarity: 'legendary', maxStack: 4,
+});
+
+// ─── Scene ────────────────────────────────────────────────────────────────────
+class Pinball extends Phaser.Scene {
+  constructor() { super('Pinball'); }
+
+  // Persistent cross-level state
+  init(data) {
+    this.level     = data.level     ?? 1;
+    this.score     = data.score     ?? 0;
+    this.ballsLeft = data.ballsLeft ?? 3;
+    this.hp        = data.hp        ?? 5;
+    this.maxHP     = data.maxHP     ?? 5;
+    this.gold      = data.gold      ?? 0;
+    this.inventory = [...(data.inventory ?? [])];
+  }
+
+  // Derived from inventory — no separate flag needed
+  get hasMidFlippers() { return this.inventory.includes('midFlippers'); }
+
+  create() {
+    this.launched      = false;
+    this.lockHits      = 0;
+    this.lockUnlocked  = false;
+    this.levelComplete = false;
+    this.lAng = L_REST; this.rAng = R_REST;
+    this.lPrevAng = L_REST; this.rPrevAng = R_REST;
+    this.levelParams = getLevelParams(this.level);
+    this.bumpers  = null;
+    this.trail    = [];
+    this.shieldHP = 0;
+    this.shieldRechargeTimer = null;
+    this.extraBalls = [];
+
+    this.matter.world.setGravity(0, GRAVITY * SUBSTEPS);
+    this.matter.world.autoUpdate = false;
+
+    // Shared particle dot texture
+    const dotGfx = this.make.graphics({ x: 0, y: 0, add: false });
+    dotGfx.fillStyle(0xffffff); dotGfx.fillCircle(4, 4, 4);
+    dotGfx.generateTexture('dot', 8, 8); dotGfx.destroy();
+
+    this.trailGfx = this.add.graphics().setDepth(8);
+
+    this.buildBG();
+    this.buildWalls();
+    this.buildGutters();
+    this.buildFlippers();
+    this.buildBumpers(this.placePegs(this.generatePegTypes()));
+    this.buildHUD();
+    this.buildDebugMenu();
+    this.setupInput();
+    this.spawnBall();
+    this.setupCollisions();
+    fireHook(this, 'onApply');
+  }
+
+  // ─── Background ──────────────────────────────────────────────────────────────
+
+  buildBG() {
+    const { bg, grid } = getBgColors(this.level);
+    this.add.rectangle(W / 2, H / 2, W, H, bg);
+    const g = this.add.graphics();
+    g.lineStyle(1, grid, 1);
+    for (let x = BX1; x <= BX2; x += r(30)) g.lineBetween(x, BY1, x, H);
+    for (let y = BY1; y <= H;   y += r(30)) g.lineBetween(BX1, y, BX2, y);
+  }
+
+  // ─── Walls ───────────────────────────────────────────────────────────────────
+
+  buildWalls() {
+    const mid = (BX1 + BX2) / 2, wallH = H * 2;
+
+    const g = this.add.graphics();
+    g.lineStyle(2, 0x1e2a50);
+    g.moveTo(BX1, BY1); g.lineTo(BX1, H);
+    g.moveTo(BX2, BY1); g.lineTo(BX2, H);
+    g.strokePath();
+
+    this.topBorderGfx = this.add.graphics();
+    this.topBorderGfx.lineStyle(2, 0x1e2a50);
+    this.topBorderGfx.lineBetween(BX1, BY1, BX2, BY1);
+
+    this.matter.add.rectangle(BX1 - r(150), H / 2, r(300), wallH, { isStatic: true });
+    this.matter.add.rectangle(BX2 + r(150), H / 2, r(300), wallH, { isStatic: true });
+    this.topWall = this.matter.add.rectangle(mid, BY1 - r(150), BX2 - BX1, r(300), {
+      isStatic: true, restitution: 0.4, label: 'wall'
+    });
+  }
+
+  // ─── Gutters ──────────────────────────────────────────────────────────────────
+
+  buildGutters() {
+    const lStartY = LP.y - (LP.x - BX1) * Math.tan(FA);
+    this.addSeg(BX1, lStartY, LP.x, LP.y, 0x1e2a50, 30);
+    const rStartY = RP.y - (BX2 - RP.x) * Math.tan(FA);
+    this.addSeg(BX2, rStartY, RP.x, RP.y, 0x1e2a50, 30);
+  }
+
+  addSeg(x1, y1, x2, y2, color, height = 8) {
+    const dx = x2-x1, dy = y2-y1;
+    const len = Math.sqrt(dx*dx+dy*dy);
+    const body = this.matter.add.rectangle((x1+x2)/2, (y1+y2)/2,
+      len, height,
+      { isStatic: true, friction: 0, restitution: 0.3, label: 'wall' });
+    MBody.setAngle(body, Math.atan2(dy, dx));
+    // Draw filled polygon matching the physics body exactly
+    const angle = Math.atan2(dy, dx);
+    const cx = (x1+x2)/2, cy = (y1+y2)/2;
+    const hw = len/2, hh = height/2;
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([lx,ly]) => ({
+      x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos
+    }));
+    const g = this.add.graphics();
+    g.fillStyle(color, 0.55); g.fillPoints(corners, true);
+    g.lineStyle(2, color, 1); g.strokePoints(corners, true);
+  }
+
+  // ─── Flippers ─────────────────────────────────────────────────────────────────
+
+  buildFlippers() {
+    const mkFlipper = (cx, cy, angle) => {
+      const b = this.matter.add.rectangle(cx, cy, FL, FH, {
+        isStatic: true, label: 'flipper', friction: 0.05,
+        restitution: 0.15, chamfer: { radius: 5 }
+      });
+      MBody.setAngle(b, angle);
+      return b;
+    };
+    const lc = this.flipCenter(LP, this.lAng);
+    const rc = this.flipCenter(RP, this.rAng);
+    this.lFlipBody = mkFlipper(lc.x, lc.y, this.lAng);
+    this.rFlipBody = mkFlipper(rc.x, rc.y, this.rAng);
+    this.lFlipGfx  = this.add.graphics().setDepth(5);
+    this.rFlipGfx  = this.add.graphics().setDepth(5);
+    const pd = this.add.graphics().setDepth(6);
+    pd.fillStyle(0x4466bb);
+    pd.fillCircle(LP.x, LP.y, 5); pd.fillCircle(RP.x, RP.y, 5);
+
+    // Mid flippers — only if purchased
+    this.lFlipBody2 = null; this.rFlipBody2 = null;
+    this.lFlipGfx2  = null; this.rFlipGfx2  = null;
+    if (this.hasMidFlippers) {
+      const mkFlipper2 = (cx, cy, angle) => {
+        const b = this.matter.add.rectangle(cx, cy, FL2, FH2, {
+          isStatic: true, label: 'flipper', friction: 0.05,
+          restitution: 0.15, chamfer: { radius: 4 }
+        });
+        MBody.setAngle(b, angle);
+        return b;
+      };
+      const lc2 = this.flipCenter(LP2, this.lAng, FL2);
+      const rc2 = this.flipCenter(RP2, this.rAng, FL2);
+      this.lFlipBody2 = mkFlipper2(lc2.x, lc2.y, this.lAng);
+      this.rFlipBody2 = mkFlipper2(rc2.x, rc2.y, this.rAng);
+      this.lFlipGfx2  = this.add.graphics().setDepth(5);
+      this.rFlipGfx2  = this.add.graphics().setDepth(5);
+      const pd2 = this.add.graphics().setDepth(6);
+      pd2.fillStyle(0x336699);
+      pd2.fillCircle(LP2.x, LP2.y, 4); pd2.fillCircle(RP2.x, RP2.y, 4);
+    }
+  }
+
+  flipCenter(pivot, angle, len = FL) {
+    return { x: pivot.x + Math.cos(angle)*len/2, y: pivot.y + Math.sin(angle)*len/2 };
+  }
+  moveFlipper(body, pivot, angle, len = FL) {
+    MBody.setPosition(body, this.flipCenter(pivot, angle, len));
+    MBody.setAngle(body, angle);
+  }
+  drawFlipper(gfx, body, active, fl = FL, fh = FH) {
+    gfx.clear();
+    const { x, y } = body.position, a = body.angle;
+    const hw = fl/2+1, hh = fh/2+1;
+    const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([cx,cy]) => ({
+      x: x + cx*Math.cos(a) - cy*Math.sin(a),
+      y: y + cx*Math.sin(a) + cy*Math.cos(a)
+    }));
+    gfx.fillStyle(active ? 0x3388ee : 0x1a3366);
+    gfx.fillPoints(corners, true);
+    gfx.lineStyle(2, active ? 0x77bbff : 0x335588);
+    gfx.strokePoints(corners, true);
+  }
+
+  // ─── Level generation ─────────────────────────────────────────────────────────
+
+  generatePegTypes() {
+    const { goldChance, damageCount, pegCount } = this.levelParams;
+
+    const types = [
+      { type: 'lock',   r: r(26) },
+      { type: 'gold',   r: r(20) },
+    ];
+    for (let i = 0; i < damageCount; i++)
+      types.push({ type: 'damage', r: r(18) });
+
+    while (types.length < pegCount)
+      types.push(Math.random() < goldChance
+        ? { type: 'gold',   r: r(20) }
+        : { type: 'normal', r: r(18) });
+
+    return types;
+  }
+
+  placePegs(types) {
+    const MIN_GAP = r(22);
+    const placed  = [];
+    for (const t of types) {
+      let pos, tries = 0;
+      do {
+        pos = {
+          x: Phaser.Math.Between(BX1 + t.r + r(14), BX2 - t.r - r(14)),
+          y: Phaser.Math.Between(BY1 + r(55), r(490))
+        };
+        tries++;
+      } while (
+        tries < 400 &&
+        placed.some(p => Math.hypot(p.x-pos.x, p.y-pos.y) < p.r + t.r + MIN_GAP)
+      );
+      placed.push({ ...t, ...pos });
+    }
+    return placed;
+  }
+
+  // ─── Bumpers (supports clean rebuild for reroll) ──────────────────────────────
+
+  buildBumpers(defs) {
+    if (this.bumpers) {
+      for (const b of this.bumpers) {
+        if (b.body) this.matter.world.remove(b.body);
+        b.gfx?.destroy(); b.labelTxt?.destroy(); b.countTxt?.destroy();
+      }
+    }
+    const { lockCount } = this.levelParams;
+    const ts = { fontFamily: 'monospace', fontStyle: 'bold' };
+
+    this.bumpers = defs.map(b => {
+      const body = this.matter.add.circle(b.x, b.y, b.r, {
+        isStatic: true, restitution: 1.4, friction: 0, label: 'bumper'
+      });
+      const gfx = this.add.graphics();
+      this.drawBumper(gfx, b, false);
+
+      let labelTxt = null, countTxt = null;
+      if (b.type === 'lock') {
+        const left = Math.max(0, lockCount - this.lockHits);
+        countTxt = this.add.text(b.x, b.y - r(4),
+          this.lockUnlocked ? '✓' : `${left}`,
+          { ...ts, fontSize: fs(16), color: '#ffffff' }).setOrigin(0.5).setDepth(4);
+        labelTxt = this.add.text(b.x, b.y + r(11),
+          this.lockUnlocked ? 'OPEN' : 'LOCK',
+          { ...ts, fontSize: fs(7),
+            color: this.lockUnlocked ? '#00ffaa' : '#88ccff' }
+        ).setOrigin(0.5).setDepth(4);
+      } else if (b.type === 'gold') {
+        labelTxt = this.add.text(b.x, b.y, 'G',
+          { ...ts, fontSize: fs(14), color: '#ffdd44' }).setOrigin(0.5).setDepth(4);
+      } else if (b.type === 'damage') {
+        labelTxt = this.add.text(b.x, b.y, '!',
+          { ...ts, fontSize: fs(16), color: '#ff6666' }).setOrigin(0.5).setDepth(4);
+      }
+      return { body, gfx, labelTxt, countTxt, ...b, flash: 0 };
+    });
+  }
+
+  drawBumper(gfx, b, lit) {
+    const disabled = b.disabledUntil && this.time.now < b.disabledUntil;
+    const C = {
+      normal: { bg: lit?0xbb33ff:0x160020, ring: lit?0xdd88ff:0x771199, inner: lit?0xffffff:0x440066 },
+      lock:   { bg: lit?0x44aaff:0x001833, ring: lit?0x88ddff:0x224488, inner: lit?0xffffff:0x112244 },
+      gold:   { bg: lit?0xffdd00:0x1a1000, ring: lit?0xffee88:0x886600, inner: lit?0xffffff:0x443300 },
+      damage: disabled
+        ? { bg: 0x111111, ring: 0x333333, inner: 0x222222 }
+        : { bg: lit?0xff4444:0x220000, ring: lit?0xff9999:0x881111, inner: lit?0xffffff:0x440000 },
+    };
+    const c = C[b.type] || C.normal;
+    gfx.clear();
+    gfx.fillStyle(c.bg);    gfx.fillCircle(b.x, b.y, b.r);
+    gfx.lineStyle(2,c.ring);  gfx.strokeCircle(b.x, b.y, b.r);
+    gfx.lineStyle(1,c.inner); gfx.strokeCircle(b.x, b.y, b.r - 5);
+  }
+
+  // ─── Reroll ───────────────────────────────────────────────────────────────────
+
+  rerollPegs() {
+    if (this.gold < 2) {
+      // Shake button to signal can't afford
+      this.tweens.add({
+        targets: this.rerollBtn,
+        x: { from: this.rerollBtn.x - 5, to: this.rerollBtn.x },
+        duration: 70, yoyo: true, repeat: 3
+      });
+      return;
+    }
+    this.gold -= 2;
+    this.goldTxt.setText(`G:${this.gold}`);
+    this.updateRerollBtn();
+
+    // Keep peg types, randomise positions only
+    const types = this.bumpers.map(b => ({ type: b.type, r: b.r }));
+    this.buildBumpers(this.placePegs(types));
+    this.cameras.main.flash(100, 15, 15, 35);
+  }
+
+  updateRerollBtn() {
+    this.rerollBtn?.setColor(this.gold >= 2 ? '#55aa55' : '#443333');
+  }
+
+  // ─── HUD ─────────────────────────────────────────────────────────────────────
+
+  buildHUD() {
+    const hy = r(18), hh = r(36), sub = r(44);
+    this.add.rectangle(W/2, hy, W, hh, 0x040408).setDepth(20);
+
+    this.scoreTxt = this.add.text(BX1+r(5), hy, `SCORE  ${this.score}`,
+      { fontSize: fs(12), color: '#6677bb', fontFamily: 'monospace' }
+    ).setOrigin(0, 0.5).setDepth(21);
+
+    this.goldTxt = this.add.text(W/2-r(90), hy, `GOLD  ${this.gold}`,
+      { fontSize: fs(12), color: '#ccaa00', fontFamily: 'monospace' }
+    ).setOrigin(0, 0.5).setDepth(21);
+
+    this.levelTxt = this.add.text(W/2, hy, `LEVEL  ${this.level}`,
+      { fontSize: fs(12), color: '#446644', fontFamily: 'monospace' }
+    ).setOrigin(0.5, 0.5).setDepth(21);
+
+    this.ballsTxt = this.add.text(BX2-r(5), hy, `BALLS  ${this.ballsLeft}`,
+      { fontSize: fs(12), color: '#337733', fontFamily: 'monospace' }
+    ).setOrigin(1, 0.5).setDepth(21);
+
+    this.refreshHP();
+
+    this.rerollBtn = this.add.text(BX2-r(5), sub, '↺ REROLL  -2G', {
+      fontSize: fs(11), color: '#55aa55', fontFamily: 'monospace',
+      backgroundColor: '#050d05', padding: { x: r(6), y: r(3) }
+    }).setOrigin(1, 0).setDepth(25).setInteractive({ useHandCursor: true });
+
+    this.rerollBtn.on('pointerdown', () => this.rerollPegs());
+    this.rerollBtn.on('pointerover', () => { if (this.gold >= 2) this.rerollBtn.setColor('#aaffaa'); });
+    this.rerollBtn.on('pointerout',  () => this.updateRerollBtn());
+    this.updateRerollBtn();
+
+    this.launchTxt = this.add.text(W/2, H/2, 'SPACE  —  launch', {
+      fontSize: fs(12), color: '#2a2a44', fontFamily: 'monospace', align: 'center'
+    }).setOrigin(0.5).setDepth(22);
+
+    this.dbgToggle = this.add.text(BX1+r(5), sub, '⚙ DBG', {
+      fontSize: fs(11), color: '#334455', fontFamily: 'monospace',
+      backgroundColor: '#05050a', padding: { x: r(5), y: r(3) }
+    }).setOrigin(0, 0).setDepth(25).setInteractive({ useHandCursor: true });
+    this.dbgToggle.on('pointerdown', () => {
+      const vis = !this.debugPanel?.visible;
+      this.debugPanel?.setVisible(vis);
+      this.dbgToggle.setColor(vis ? '#55aacc' : '#334455');
+    });
+  }
+
+  refreshHP() {
+    const ballCount = 1 + this.inventory.filter(k => k === 'multiball').length;
+    window.updateSideHP?.(this.hp, this.maxHP, ballCount);
+    window.updateEquipped?.(this.inventory);
+  }
+
+  // ─── Debug menu ───────────────────────────────────────────────────────────────
+
+  buildDebugMenu() {
+    const DX = BX1 + r(5), DY = r(38), DW = BX2 - BX1, DH = r(182);
+    this.debugPanel = this.add.container(0, 0).setDepth(52).setVisible(false);
+    const mk = o => { this.debugPanel.add(o); return o; };
+
+    mk(this.add.rectangle(W/2, DY + DH/2, DW, DH, 0x010109, 0.97)
+      .setStrokeStyle(1, 0x1e2a44));
+
+    const sec = (x, y, str) => mk(this.add.text(x, y, str, {
+      fontFamily: 'monospace', fontSize: fs(9), color: '#2a3a55'
+    }));
+    const dbBtn = (x, y, label, cb, col = '#33ddbb') => {
+      const t = mk(this.add.text(x, y, label, {
+        fontFamily: 'monospace', fontSize: fs(11), color: col,
+        backgroundColor: '#020b09', padding: { x: r(4), y: r(2) }
+      }).setInteractive({ useHandCursor: true }));
+      t.on('pointerdown', cb);
+      t.on('pointerover', () => t.setColor('#99ffee'));
+      t.on('pointerout',  () => t.setColor(col));
+      return t;
+    };
+
+    // Syncs HUD labels + debug value readouts
+    this._dbgVals = {};
+    const sync = () => {
+      this.refreshHP();
+      this.goldTxt.setText(`G:${this.gold}`);
+      this.ballsTxt.setText(`B:${this.ballsLeft}`);
+      this.scoreTxt.setText(`SCORE  ${this.score}`);
+      this._dbgVals.gold?.setText(`${this.gold}`);
+      this._dbgVals.hp?.setText(`${this.hp}/${this.maxHP}`);
+      this._dbgVals.balls?.setText(`${this.ballsLeft}`);
+      this._dbgVals.level?.setText(`${this.level}`);
+    };
+
+    let y = DY + r(8);
+
+    // ── GAME STATE ──────────────────────────────────────────────────────────
+    sec(DX, y, '─ GAME STATE'); y += r(13);
+    dbBtn(DX,       y, 'SHOP',      () => this.scene.start('Shop', { level: this.level, score: this.score, ballsLeft: this.ballsLeft, hp: this.hp, maxHP: this.maxHP, gold: this.gold, inventory: [...this.inventory] }));
+    dbBtn(DX+r(52),  y, 'NEXT LVL',  () => { if (!this.levelComplete) { this.levelComplete = true; this.nextLevel(); } });
+    dbBtn(DX+r(126), y, 'GAME OVER', () => { this.ballsLeft = 1; if (this.ballBody) this.drain(); });
+    dbBtn(DX+r(216), y, 'RESET',     () => this.scene.start('Pinball', {}));
+    y += r(22);
+
+    // ── STATS ───────────────────────────────────────────────────────────────
+    sec(DX, y, '─ STATS'); y += r(13);
+    [
+      { key: 'gold',  lbl: 'GOLD ', step: 5, get: () => this.gold,        set: v => { this.gold        = Math.max(0, v); } },
+      { key: 'hp',    lbl: 'HP   ', step: 1, get: () => this.hp,          set: v => { this.hp          = Phaser.Math.Clamp(v, 0, this.maxHP); } },
+      { key: 'balls', lbl: 'BALLS', step: 1, get: () => this.ballsLeft,   set: v => { this.ballsLeft   = Math.max(0, v); } },
+      { key: 'level', lbl: 'LEVEL', step: 1, get: () => this.level,       set: v => { this.level       = Math.max(1, v); } },
+    ].forEach((s, i) => {
+      const sx = DX + (i % 2) * r(192), sy = y + Math.floor(i / 2) * r(19);
+      mk(this.add.text(sx, sy + r(2), s.lbl, { fontFamily: 'monospace', fontSize: fs(10), color: '#4466aa' }));
+      dbBtn(sx + r(46), sy, '−', () => { s.set(s.get() - s.step); sync(); });
+      const vt = mk(this.add.text(sx + r(68), sy + r(2), `${s.get()}`, { fontFamily: 'monospace', fontSize: fs(11), color: '#ccddf0' }));
+      this._dbgVals[s.key] = vt;
+      dbBtn(sx + r(108), sy, '+', () => { s.set(s.get() + s.step); sync(); });
+    });
+    y += r(44);
+
+    // ── PARTICLES ───────────────────────────────────────────────────────────
+    sec(DX, y, '─ PARTICLES'); y += r(13);
+    dbBtn(DX,     y, 'DEATH',  () => {
+      const px = this.ballBody?.position.x ?? W/2, py = this.ballBody?.position.y ?? H/2;
+      this.cameras.main.shake(200, 0.011);
+      this.cameras.main.flash(160, 200, 40, 40, false);
+      const m = this.add.particles('dot').setDepth(30);
+      m.createEmitter({ speed:{min:55,max:210}, angle:{min:0,max:360}, scale:{start:1.1,end:0},
+        lifespan:{min:280,max:650}, tint:[0xff3333,0xff6600,0xffaa00,0xffffff],
+        blendMode:'ADD', gravityY:280, on:false }).explode(22, px, py);
+      this.time.delayedCall(750, () => m.destroy());
+    });
+    dbBtn(DX+r(60),  y, 'ESCAPE', () => {
+      const m = this.add.particles('dot').setDepth(15);
+      const e = m.createEmitter({ x:{min:BX1+10,max:BX2-10}, y:BY1, speedX:{min:-30,max:30},
+        speedY:{min:60,max:220}, scale:{start:0.8,end:0}, lifespan:{min:500,max:1100},
+        tint:[0xffee44,0xffffff,0xffdd00,0xffcc88], blendMode:'ADD', gravityY:160, frequency:18, quantity:3 });
+      this.time.delayedCall(1000, () => { e.stop(); this.time.delayedCall(1200, () => m.destroy()); });
+    });
+    dbBtn(DX+r(124), y, '+GOLD',  () => this.showPopup(this.ballBody?.position.x ?? W/2, (this.ballBody?.position.y ?? H/2) - r(20), '+1 GOLD', '#ffee55', [0xffdd00,0xffaa00,0xffffff]));
+    dbBtn(DX+r(188), y, '-HP',    () => this.showPopup(this.ballBody?.position.x ?? W/2, (this.ballBody?.position.y ?? H/2) - r(20), '-1 HP',   '#ff6666', [0xff2222,0xff6600,0xff0066]));
+    dbBtn(DX+r(232), y, 'RAIN',   () => {
+      const rm = this.add.particles('dot').setDepth(26);
+      const re = rm.createEmitter({ x:{min:BX1+10,max:BX2-10}, y:BY1, speedX:{min:-25,max:25},
+        speedY:{min:50,max:180}, scale:{start:0.6,end:0}, lifespan:{min:400,max:900},
+        tint:[0x00ffaa,0x44ffdd,0x00ff44], blendMode:'ADD', gravityY:180, frequency:25, quantity:2 });
+      this.time.delayedCall(1200, () => { re.stop(); this.time.delayedCall(1000, () => rm.destroy()); });
+    });
+  }
+
+  // ─── Popup + particles ────────────────────────────────────────────────────────
+
+  showPopup(x, y, label, textColor, tints) {
+    const txt = this.add.text(x, y, label, {
+      fontSize: fs(13), color: textColor, fontFamily: 'monospace', fontStyle: 'bold',
+      stroke: '#000000', strokeThickness: r(3)
+    }).setOrigin(0.5, 1).setDepth(25);
+
+    this.tweens.add({
+      targets: txt, y: y - r(55), alpha: 0,
+      duration: 900, ease: 'Power2Out',
+      onComplete: () => txt.destroy()
+    });
+
+    const mgr = this.add.particles('dot').setDepth(24);
+    mgr.createEmitter({
+      speed: { min: 55, max: 145 }, angle: { min: 0, max: 360 },
+      scale: { start: 0.75, end: 0 }, lifespan: { min: 380, max: 650 },
+      tint: tints, blendMode: 'ADD', gravityY: 280, on: false
+    }).explode(14, x, y);
+    this.time.delayedCall(700, () => mgr.destroy());
+  }
+
+  // Tiny purple burst when a normal peg is hit
+  pegPop(x, y) {
+    const m = this.add.particles('dot').setDepth(22);
+    m.createEmitter({
+      speed: { min: r(30), max: r(90) }, angle: { min: 0, max: 360 },
+      scale: { start: 0.5, end: 0 }, lifespan: { min: 200, max: 420 },
+      tint: [0xaa44ff, 0xcc66ff, 0xdd99ff], blendMode: 'ADD',
+      gravityY: r(220), on: false
+    }).explode(7, x, y);
+    this.time.delayedCall(450, () => m.destroy());
+  }
+
+  // Tiny spark on wall / flipper / ramp contact
+  contactSpark(x, y) {
+    const m = this.add.particles('dot').setDepth(20);
+    m.createEmitter({
+      speed: { min: r(15), max: r(55) }, angle: { min: 0, max: 360 },
+      scale: { start: 0.3, end: 0 }, lifespan: { min: 80, max: 200 },
+      tint: [0x8855cc, 0xaaaaff, 0xffffff], blendMode: 'ADD',
+      gravityY: r(160), on: false
+    }).explode(3, x, y);
+    this.time.delayedCall(250, () => m.destroy());
+  }
+
+  // ─── Ball ─────────────────────────────────────────────────────────────────────
+
+  spawnBall() {
+    const sx = (LP.x + RP.x) / 2, sy = H - r(58);
+    this.ballBody = this.matter.add.circle(sx, sy, BALL_R, {
+      label: 'ball', restitution: 0.5, friction: 0.003,
+      frictionAir: 0.004, density: 0.004
+    });
+    MBody.setStatic(this.ballBody, true);
+    this.ballGfx  = this.add.circle(sx, sy, BALL_R, 0xdde0ff).setDepth(10);
+    this.ballRing = this.add.graphics().setDepth(9);
+    this.launched = false;
+    this.launchTxt.setVisible(true);
+    fireHook(this, 'onBallSpawn');
+    this.refreshHP();
+  }
+
+  spawnExtraBall() {
+    const sx = (LP.x + RP.x) / 2 + r(22), sy = H - r(58);
+    const body = this.matter.add.circle(sx, sy, BALL_R, {
+      label: 'ball', restitution: 0.5, friction: 0.003, frictionAir: 0.004, density: 0.004
+    });
+    MBody.setVelocity(body, {
+      x: Phaser.Math.FloatBetween(0.5 * S, 1.8 * S), y: -10 * S
+    });
+    const gfx      = this.add.circle(sx, sy, BALL_R, 0xffccee).setDepth(10);
+    const ring     = this.add.graphics().setDepth(9);
+    const trailGfx = this.add.graphics().setDepth(7);
+    const eb = { body, gfx, ring, trailGfx, trail: [] };
+    this.extraBalls.push(eb);
+    this.refreshHP();
+  }
+
+  drainExtraBall(i) {
+    const eb = this.extraBalls[i];
+    const { x, y } = eb.body.position;
+    const m = this.add.particles('dot').setDepth(30);
+    m.createEmitter({
+      speed: { min: 40, max: 160 }, angle: { min: 0, max: 360 },
+      scale: { start: 0.8, end: 0 }, lifespan: { min: 200, max: 500 },
+      tint: [0xff88cc, 0xffaadd, 0xffffff], blendMode: 'ADD', gravityY: 200, on: false
+    }).explode(14, x, y);
+    this.time.delayedCall(600, () => m.destroy());
+    this.matter.world.remove(eb.body);
+    eb.gfx.destroy(); eb.ring.destroy(); eb.trailGfx.destroy();
+    this.extraBalls.splice(i, 1);
+    this.refreshHP();
+  }
+
+  // ─── Input ────────────────────────────────────────────────────────────────────
+
+  setupInput() {
+    this.keys = this.input.keyboard.addKeys({
+      left:  Phaser.Input.Keyboard.KeyCodes.LEFT,
+      right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      a:     Phaser.Input.Keyboard.KeyCodes.A,
+      d:     Phaser.Input.Keyboard.KeyCodes.D,
+      space: Phaser.Input.Keyboard.KeyCodes.SPACE,
+      shift: Phaser.Input.Keyboard.KeyCodes.SHIFT
+    });
+    this.shakeReadyAt = 0;
+  }
+
+  // ─── Collisions ───────────────────────────────────────────────────────────────
+
+  setupCollisions() {
+    this.matter.world.on('collisionstart', (event) => {
+      for (const pair of event.pairs) {
+        const { bodyA, bodyB } = pair;
+        const ball   = bodyA.label==='ball'   ? bodyA : bodyB.label==='ball'   ? bodyB : null;
+        const bumper = bodyA.label==='bumper' ? bodyA : bodyB.label==='bumper' ? bodyB : null;
+        const surf   = bodyA.label==='wall' || bodyA.label==='flipper' ? bodyA
+                     : bodyB.label==='wall' || bodyB.label==='flipper' ? bodyB : null;
+        if (ball && bumper) { this.hitBumper(bumper); continue; }
+        if (ball && surf) {
+          const c = pair.activeContacts?.[0]?.vertex ?? ball.position;
+          this.contactSpark(c.x, c.y);
+        }
+      }
+    });
+  }
+
+  hitBumper(bumperBody) {
+    const b = this.bumpers.find(b => b.body === bumperBody);
+    if (!b) return;
+    b.flash = 10;
+
+    switch (b.type) {
+      case 'normal':
+        this.score += 100;
+        this.scoreTxt.setText(`SCORE  ${this.score}`);
+        this.pegPop(b.x, b.y);
+        break;
+
+      case 'gold':
+        this.gold++;
+        this.score += 50;
+        this.goldTxt.setText(`G:${this.gold}`);
+        this.scoreTxt.setText(`SCORE  ${this.score}`);
+        this.updateRerollBtn();
+        this.showPopup(b.x, b.y - b.r, '+1 GOLD', '#ffee55', [0xffdd00, 0xffaa00, 0xffffff]);
+        break;
+
+      case 'damage':
+        if (b.disabledUntil && this.time.now < b.disabledUntil) break;
+        if (this.shieldHP > 0) {
+          this.shieldHP--;
+          if (this.shieldRechargeTimer) this.shieldRechargeTimer.remove();
+          this.shieldRechargeTimer = this.time.delayedCall(5000, () => {
+            this.shieldHP = 1;
+            this.shieldRechargeTimer = null;
+            this.showPopup(
+              this.ballBody?.position.x ?? W/2,
+              (this.ballBody?.position.y ?? H/2) - r(20),
+              'SHIELD READY', '#44aaff', [0x2277ff, 0x44ccff, 0xffffff]
+            );
+          });
+          this.showPopup(b.x, b.y - b.r, 'BLOCKED!', '#44aaff', [0x2277ff, 0x44ccff, 0xffffff]);
+        } else {
+          this.hp = Math.max(0, this.hp - 1);
+          this.refreshHP();
+          this.showPopup(b.x, b.y - b.r, '-1 HP', '#ff6666', [0xff2222, 0xff6600, 0xff0066]);
+          if (this.hp <= 0) this.time.delayedCall(200, () => this.drain());
+        }
+        break;
+
+      case 'lock': {
+        if (this.lockUnlocked) break;
+        this.lockHits++;
+        const left = this.levelParams.lockCount - this.lockHits;
+        if (b.countTxt) b.countTxt.setText(left > 0 ? `${left}` : '✓');
+        if (left <= 0) this.unlockTop(b);
+        break;
+      }
+    }
+    fireHook(this, 'onBumperHit', b);
+  }
+
+  // ─── Unlock top barrier ───────────────────────────────────────────────────────
+
+  unlockTop(lockBumper) {
+    if (this.lockUnlocked) return;
+    this.lockUnlocked = true;
+
+    if (this.topWall) { this.matter.world.remove(this.topWall); this.topWall = null; }
+    this.topBorderGfx.setVisible(false);
+
+    if (lockBumper?.labelTxt) lockBumper.labelTxt.setText('OPEN').setColor('#00ffaa');
+
+    // Particle rain — toned-down burst when barrier opens
+    const rainMgr = this.add.particles('dot').setDepth(15);
+    const rainEmitter = rainMgr.createEmitter({
+      x:        { min: BX1 + 10, max: BX2 - 10 },
+      y:        BY1,
+      speedX:   { min: -25, max: 25 },
+      speedY:   { min: 50,  max: 180 },
+      scale:    { start: 0.6, end: 0 },
+      lifespan: { min: 800, max: 1800 },
+      tint:     [0x00ffaa, 0x44ffdd, 0x00ff44, 0x88ffcc],
+      blendMode: 'ADD',
+      gravityY:  180,
+      frequency: 25,
+      quantity:  2
+    });
+    this.time.delayedCall(1200, () => {
+      rainEmitter.stop();
+      this.time.delayedCall(1000, () => rainMgr.destroy());
+    });
+
+    // Persistent faint guide particles — slow drift downward so player knows to go up
+    const guideMgr = this.add.particles('dot').setDepth(14);
+    guideMgr.createEmitter({
+      x:        { min: BX1 + 8, max: BX2 - 8 },
+      y:        BY1 - 2,
+      speedX:   { min: -15, max: 15 },
+      speedY:   { min: 18, max: 70 },
+      scale:    { start: 0.35, end: 0 },
+      alpha:    { start: 0.32, end: 0 },
+      lifespan: { min: 5600, max: 11000 },
+      tint:     [0x00ffaa, 0x44ffee, 0x88ffcc],
+      blendMode: 'ADD',
+      gravityY:  30,
+      frequency: 60,
+      quantity:  1
+    });
+    this.guideMgr = guideMgr;   // kept alive until scene ends
+
+    // Golden glow from the top opening
+    const glowGfx = this.add.graphics().setDepth(13).setAlpha(0.3);
+    glowGfx.fillGradientStyle(0xffcc00, 0xffcc00, 0xffcc00, 0xffcc00, 0.08, 0.08, 0, 0);
+    glowGfx.fillRect(BX1, BY1, BX2 - BX1, r(160));
+    this.tweens.add({ targets: glowGfx, alpha: 1, duration: 2200, ease: 'Sine.easeInOut', yoyo: true, repeat: -1 });
+
+    // Hint text
+    const hint = this.add.text(W/2, BY1 + r(14), '▲  ESCAPE  ▲', {
+      fontSize: fs(11), color: '#00ffaa', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(25);
+    this.time.delayedCall(3000, () => hint.destroy());
+  }
+
+  // ─── Next level ───────────────────────────────────────────────────────────────
+
+  nextLevel() {
+    // Escape rain — gold/white shower from the top barrier
+    const escapeMgr = this.add.particles('dot').setDepth(15);
+    const escapeEmitter = escapeMgr.createEmitter({
+      x:        { min: BX1 + 10, max: BX2 - 10 },
+      y:        BY1,
+      speedX:   { min: -30, max: 30 },
+      speedY:   { min: 60,  max: 220 },
+      scale:    { start: 0.8, end: 0 },
+      lifespan: { min: 500, max: 1100 },
+      tint:     [0xffee44, 0xffffff, 0xffdd00, 0xffcc88],
+      blendMode: 'ADD',
+      gravityY:  160,
+      frequency: 18,
+      quantity:  3
+    });
+    this.time.delayedCall(1000, () => {
+      escapeEmitter.stop();
+      this.time.delayedCall(1200, () => escapeMgr.destroy());
+    });
+
+    // Remove ball immediately
+    if (this.ballBody) {
+      this.matter.world.remove(this.ballBody);
+      this.ballGfx.destroy(); this.ballRing.destroy();
+      this.ballBody = null;
+      this.trail = []; this.trailGfx.clear();
+    }
+
+    const ox = W/2, oy = H/2 - r(60);
+    this.add.rectangle(ox, oy, r(310), r(80), 0x040408, 0.96).setDepth(30);
+    this.add.text(ox, oy - r(14), `LEVEL  ${this.level + 1}`, {
+      fontSize: fs(26), color: '#00ffaa', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(31);
+    this.add.text(ox, oy + r(16), 'ENTERING NEXT ROOM . . .', {
+      fontSize: fs(10), color: '#336655', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(31);
+
+    fireHook(this, 'onLevelClear');  // items may modify ballsLeft before we pass it
+    this.time.delayedCall(1400, () => {
+      this.scene.start('Shop', {
+        level:     this.level + 1,
+        score:     this.score,
+        ballsLeft: this.ballsLeft + 3,
+        hp:        this.maxHP,
+        maxHP:     this.maxHP,
+        gold:      this.gold,
+        inventory: [...this.inventory],
+      });
+    });
+  }
+
+  // ─── Update ───────────────────────────────────────────────────────────────────
+
+  update(time, delta) {
+    const k = this.keys;
+
+    if (Phaser.Input.Keyboard.JustDown(k.space) && !this.launched) {
+      MBody.setStatic(this.ballBody, false);
+      const xSign = Math.random() < 0.5 ? 1 : -1;
+      MBody.setVelocity(this.ballBody, {
+        x: xSign * Phaser.Math.FloatBetween(0.8 * S, 2.0 * S), y: -7 * S
+      });
+      this.launched = true;
+      this.launchTxt.setVisible(false);
+      const mbCount = this.inventory.filter(k => k === 'multiball').length;
+      for (let i = 0; i < mbCount; i++) this.spawnExtraBall();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(k.shift) && this.launched &&
+        this.ballBody && !this.ballBody.isStatic && time > this.shakeReadyAt) {
+      this.shakeReadyAt = time + 1500;
+      const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+      const v = this.ballBody.velocity;
+      MBody.setVelocity(this.ballBody, {
+        x: v.x + Math.cos(angle) * 5 * S,
+        y: v.y + Math.sin(angle) * 5 * S - 2 * S
+      });
+      this.cameras.main.shake(140, 0.007);
+    }
+
+    const lActive = k.left.isDown  || k.a.isDown;
+    const rActive = k.right.isDown || k.d.isDown;
+    this.lPrevAng = this.lAng; this.rPrevAng = this.rAng;
+    this.lAng = Phaser.Math.Linear(this.lAng, lActive ? L_ACTIVE : L_REST, lActive ? 0.40 : 0.22);
+    this.rAng = Phaser.Math.Linear(this.rAng, rActive ? R_ACTIVE : R_REST, rActive ? 0.40 : 0.22);
+
+    const N = SUBSTEPS;
+    for (let i = 1; i <= N; i++) {
+      const t0 = (i-1)/N, t1 = i/N;
+      const angL0 = Phaser.Math.Linear(this.lPrevAng, this.lAng, t0);
+      const angR0 = Phaser.Math.Linear(this.rPrevAng, this.rAng, t0);
+      const angL1 = Phaser.Math.Linear(this.lPrevAng, this.lAng, t1);
+      const angR1 = Phaser.Math.Linear(this.rPrevAng, this.rAng, t1);
+      const lC0 = this.flipCenter(LP, angL0), lC1 = this.flipCenter(LP, angL1);
+      const rC0 = this.flipCenter(RP, angR0), rC1 = this.flipCenter(RP, angR1);
+
+      this.moveFlipper(this.lFlipBody, LP, angL1);
+      this.moveFlipper(this.rFlipBody, RP, angR1);
+      MBody.setVelocity(this.lFlipBody, { x: lC1.x-lC0.x, y: lC1.y-lC0.y });
+      MBody.setVelocity(this.rFlipBody, { x: rC1.x-rC0.x, y: rC1.y-rC0.y });
+      MBody.setAngularVelocity(this.lFlipBody, (angL1-angL0)*6);
+      MBody.setAngularVelocity(this.rFlipBody, (angR1-angR0)*6);
+
+      // Mid flippers (same input, same angles) — only if purchased
+      if (this.lFlipBody2) {
+        const lC20 = this.flipCenter(LP2, angL0, FL2), lC21 = this.flipCenter(LP2, angL1, FL2);
+        const rC20 = this.flipCenter(RP2, angR0, FL2), rC21 = this.flipCenter(RP2, angR1, FL2);
+        this.moveFlipper(this.lFlipBody2, LP2, angL1, FL2);
+        this.moveFlipper(this.rFlipBody2, RP2, angR1, FL2);
+        MBody.setVelocity(this.lFlipBody2, { x: lC21.x-lC20.x, y: lC21.y-lC20.y });
+        MBody.setVelocity(this.rFlipBody2, { x: rC21.x-rC20.x, y: rC21.y-rC20.y });
+        MBody.setAngularVelocity(this.lFlipBody2, (angL1-angL0)*6);
+        MBody.setAngularVelocity(this.rFlipBody2, (angR1-angR0)*6);
+      }
+
+      this.matter.world.step(delta / N);
+
+      if (this.ballBody && !this.ballBody.isStatic) {
+        const v = this.ballBody.velocity;
+        const spd = Math.sqrt(v.x*v.x + v.y*v.y);
+        if (spd > MAX_BALL_V)
+          MBody.setVelocity(this.ballBody, { x: v.x/spd*MAX_BALL_V, y: v.y/spd*MAX_BALL_V });
+      }
+    }
+
+    this.drawFlipper(this.lFlipGfx, this.lFlipBody, lActive);
+    this.drawFlipper(this.rFlipGfx, this.rFlipBody, rActive);
+    if (this.lFlipGfx2) {
+      this.drawFlipper(this.lFlipGfx2, this.lFlipBody2, lActive, FL2, FH2);
+      this.drawFlipper(this.rFlipGfx2, this.rFlipBody2, rActive, FL2, FH2);
+    }
+
+    // Ball trail
+    if (this.launched && this.ballBody && !this.ballBody.isStatic) {
+      this.trail.unshift({ x: this.ballBody.position.x, y: this.ballBody.position.y });
+      if (this.trail.length > 20) this.trail.length = 20;
+    }
+    this.trailGfx.clear();
+    for (let i = 0; i < this.trail.length; i++) {
+      const alpha = (1 - i / this.trail.length) * 0.25;
+      const tr = BALL_R * (1 - i / this.trail.length);
+      this.trailGfx.fillStyle(0xaabbff, alpha);
+      this.trailGfx.fillCircle(this.trail[i].x, this.trail[i].y, tr);
+    }
+
+    if (this.ballBody) {
+      const { x, y } = this.ballBody.position;
+      this.ballGfx.setPosition(x, y);
+      this.ballRing.clear();
+      this.ballRing.lineStyle(r(3), 0x6666cc, 0.35);
+      this.ballRing.strokeCircle(x, y, BALL_R);
+      if (this.shieldHP > 0) {
+        const shieldCol = this.shieldHP >= 3 ? 0xaa44ff : this.shieldHP === 2 ? 0x44aaff : 0x888899;
+        this.ballRing.lineStyle(r(2), shieldCol, 0.85);
+        this.ballRing.strokeCircle(x, y, BALL_R + r(5));
+      } else if (this.shieldRechargeTimer) {
+        this.ballRing.lineStyle(r(1), 0x224466, 0.4);
+        this.ballRing.strokeCircle(x, y, BALL_R + r(5));
+      }
+    }
+
+    // Extra balls (multiball)
+    for (let i = this.extraBalls.length - 1; i >= 0; i--) {
+      const eb = this.extraBalls[i];
+      eb.trail.unshift({ x: eb.body.position.x, y: eb.body.position.y });
+      if (eb.trail.length > 20) eb.trail.length = 20;
+      eb.trailGfx.clear();
+      for (let j = 0; j < eb.trail.length; j++) {
+        eb.trailGfx.fillStyle(0xffaabb, (1 - j / eb.trail.length) * 0.22);
+        eb.trailGfx.fillCircle(eb.trail[j].x, eb.trail[j].y, BALL_R * (1 - j / eb.trail.length));
+      }
+      const { x, y } = eb.body.position;
+      eb.gfx.setPosition(x, y);
+      eb.ring.clear();
+      eb.ring.lineStyle(r(3), 0xcc6699, 0.35);
+      eb.ring.strokeCircle(x, y, BALL_R);
+      if (eb.body.position.y > H + 30) { this.drainExtraBall(i); continue; }
+      if (this.launched && this.lockUnlocked && !this.levelComplete && y < BY1 - 20) {
+        this.levelComplete = true; this.nextLevel();
+      }
+    }
+
+    if (this.launched && this.lockUnlocked && !this.levelComplete &&
+        this.ballBody && this.ballBody.position.y < BY1 - 20) {
+      this.levelComplete = true;
+      this.nextLevel();
+    }
+
+    if (this.launched && this.ballBody && this.ballBody.position.y > H + 30)
+      this.drain();
+
+    for (const b of this.bumpers) {
+      if (b.flash > 0) { b.flash--; this.drawBumper(b.gfx, b, b.flash > 0); }
+    }
+  }
+
+  // ─── Drain ────────────────────────────────────────────────────────────────────
+
+  drain() {
+    if (!this.ballBody) return;
+
+    // Death effects — capture position before destroying
+    const bx = this.ballBody.position.x, by = this.ballBody.position.y;
+    this.cameras.main.shake(200, 0.011);
+    this.cameras.main.flash(160, 200, 40, 40, false);
+    const deathMgr = this.add.particles('dot').setDepth(30);
+    deathMgr.createEmitter({
+      speed: { min: 55, max: 210 }, angle: { min: 0, max: 360 },
+      scale: { start: 1.1, end: 0 },
+      lifespan: { min: 280, max: 650 },
+      tint: [0xff3333, 0xff6600, 0xffaa00, 0xffffff],
+      blendMode: 'ADD', gravityY: 280, on: false
+    }).explode(22, bx, by);
+    this.time.delayedCall(750, () => deathMgr.destroy());
+
+    if (this.shieldRechargeTimer) { this.shieldRechargeTimer.remove(); this.shieldRechargeTimer = null; }
+    this.shieldHP = 0;
+    for (let i = this.extraBalls.length - 1; i >= 0; i--) this.drainExtraBall(i);
+
+    this.ballsLeft--;
+    this.ballsTxt.setText(`B:${this.ballsLeft}`);
+    this.matter.world.remove(this.ballBody);
+    this.ballGfx.destroy(); this.ballRing.destroy();
+    this.ballBody = null;
+    this.trail = []; this.trailGfx.clear();
+
+    if (this.ballsLeft <= 0) {
+      const ox = W/2, oy = H/2;
+      this.add.rectangle(ox, oy, r(300), r(140), 0x040408, 0.95).setDepth(30);
+      this.add.text(ox, oy-r(40), 'GAME  OVER',
+        { fontSize: fs(22), color: '#ff4455', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      this.add.text(ox, oy-r(12), `SCORE  ${this.score}`,
+        { fontSize: fs(14), color: '#7788cc', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      this.add.text(ox, oy+r(8), `GOLD  ${this.gold}  |  LEVEL  ${this.level}`,
+        { fontSize: fs(12), color: '#ccaa00', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      this.add.text(ox, oy+r(34), 'click or SPACE to restart',
+        { fontSize: fs(11), color: '#333355', fontFamily: 'monospace' }).setOrigin(0.5).setDepth(31);
+      const doRestart = () => this.scene.start('Pinball', {});
+      this.input.once('pointerdown', doRestart);
+      this.input.keyboard.once('keydown-SPACE', doRestart);
+    } else {
+      this.hp = this.maxHP;
+      this.refreshHP();
+      this.time.delayedCall(900, () => this.spawnBall());
+    }
+  }
+}
+
+// ─── Shop Scene ───────────────────────────────────────────────────────────────
+class Shop extends Phaser.Scene {
+  constructor() { super('Shop'); }
+
+  init(data) {
+    this.level     = data.level;
+    this.score     = data.score;
+    this.ballsLeft = data.ballsLeft;
+    this.hp        = data.hp;
+    this.maxHP     = data.maxHP;
+    this.gold      = data.gold;
+    this.inventory = [...(data.inventory ?? [])];
+    this.shopOffer = this.computeOffer();
+  }
+
+  computeOffer() {
+    const pool = Object.values(ITEMS).filter(i => {
+      const count = this.inventory.filter(k => k === i.key).length;
+      const max   = i.maxStack ?? Infinity;
+      return max === Infinity || count < max;
+    });
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool.slice(0, 3);
+  }
+
+  create() {
+    const { bg } = getBgColors(this.level);
+    this.add.rectangle(W/2, H/2, W, H, bg);
+
+    const ts = { fontFamily: 'monospace', fontStyle: 'bold' };
+
+    // Grid overlay (matches pinball bg style)
+    const gc = getBgColors(this.level).grid;
+    const g = this.add.graphics();
+    g.lineStyle(1, gc, 1);
+    for (let x = 0; x <= W; x += r(30)) g.lineBetween(x, 0, x, H);
+    for (let y = 0; y <= H; y += r(30)) g.lineBetween(0, y, W, y);
+
+    this.add.rectangle(W/2, r(18), W, r(36), 0x040408).setDepth(10);
+    this.add.text(W/2, r(18), `SCORE  ${this.score}  |  L:${this.level}  |  B:${this.ballsLeft}`, {
+      fontSize: fs(12), color: '#6677bb', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(11);
+
+    // ⚙ DBG button — toggles item-grant panel
+    const dbgBtn = this.add.text(BX2 - r(4), r(18), '⚙ DBG', {
+      fontFamily: 'monospace', fontSize: fs(9), color: '#2a3a55',
+      backgroundColor: '#040408', padding: { x: r(3), y: r(2) }
+    }).setOrigin(1, 0.5).setDepth(12).setInteractive({ useHandCursor: true });
+
+    const panel = this.add.container(0, 0).setDepth(50).setVisible(false);
+    const PY = r(40), PH = r(36) + Math.ceil(Object.keys(ITEMS).length / 4) * r(20);
+    panel.add(this.add.rectangle(W/2, PY + PH/2, W - r(20), PH, 0x010109, 0.97)
+      .setStrokeStyle(1, 0x1e2a44));
+    let px = BX1 + r(4), py = PY + r(6);
+    panel.add(this.add.text(px, py, '─ GIVE ITEM', {
+      fontFamily: 'monospace', fontSize: fs(8), color: '#2a3a55'
+    }));
+    py += r(14);
+    let col = 0;
+    for (const item of Object.values(ITEMS)) {
+      const rar = RARITY[item.rarity] ?? RARITY.common;
+      const btn = this.add.text(px + col * r(118), py, item.label, {
+        fontFamily: 'monospace', fontSize: fs(9), color: rar.hex,
+        backgroundColor: '#020b09', padding: { x: r(3), y: r(2) }
+      }).setInteractive({ useHandCursor: true });
+      btn.on('pointerdown', () => {
+        const cnt = this.inventory.filter(k => k === item.key).length;
+        const mx  = item.maxStack ?? Infinity;
+        if (mx === Infinity || cnt < mx) this.inventory.push(item.key);
+        item.onBuy?.(this);
+        this.goldTxt.setText(`GOLD:  ${this.gold}`);
+        this.statsTxt.setText(this.statsStr());
+        this.itemBtns.forEach(b => this.refreshItem(b));
+      });
+      panel.add(btn);
+      col++;
+      if (col >= 4) { col = 0; py += r(20); }
+    }
+    dbgBtn.on('pointerdown', () => panel.setVisible(!panel.visible));
+    dbgBtn.on('pointerover', () => dbgBtn.setColor('#aabbcc'));
+    dbgBtn.on('pointerout',  () => dbgBtn.setColor('#2a3a55'));
+
+    this.add.text(W/2, r(78), 'S H O P', { ...ts, fontSize: fs(30), color: '#ccaa00' }
+    ).setOrigin(0.5);
+    this.add.text(W/2, r(110), `— entering level ${this.level} —`, {
+      fontSize: fs(11), color: '#446644', fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    this.goldTxt = this.add.text(W/2, r(140), `GOLD:  ${this.gold}`, {
+      ...ts, fontSize: fs(17), color: '#ffdd44'
+    }).setOrigin(0.5);
+
+    this.statsTxt = this.add.text(W/2, r(162), this.statsStr(), {
+      fontSize: fs(11), color: '#556688', fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    this.itemBtns = [];
+    this.shopOffer.forEach((item, i) => this.buildItem(item, i));
+
+    this.rerollBtn = this.add.text(W/2, r(490), '↺  REROLL  -5G', {
+      fontFamily: 'monospace', fontStyle: 'bold', fontSize: fs(13),
+      backgroundColor: '#050d0a', padding: { x: r(14), y: r(7) }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.rerollBtn.on('pointerover', () => { if (this.gold >= 5) this.rerollBtn.setColor('#aaffcc'); });
+    this.rerollBtn.on('pointerout',  () => this.updateRerollShopBtn());
+    this.rerollBtn.on('pointerdown', () => this.rerollShop());
+    this.updateRerollShopBtn();
+
+    const cont = this.add.text(W/2, H - r(60), '▶  CONTINUE', {
+      ...ts, fontSize: fs(16), color: '#00ffaa',
+      backgroundColor: '#021a0e', padding: { x: r(18), y: r(9) }
+    }).setOrigin(0.5).setDepth(10).setInteractive({ useHandCursor: true });
+    cont.on('pointerover', () => cont.setColor('#aaffcc'));
+    cont.on('pointerout',  () => cont.setColor('#00ffaa'));
+    cont.on('pointerdown', () => this.proceed());
+    this.input.keyboard.once('keydown-SPACE', () => this.proceed());
+  }
+
+  statsStr() {
+    return `Balls: ${this.ballsLeft}   HP: ${this.hp} / ${this.maxHP}`;
+  }
+
+  buildItem(item, i) {
+    const y = r(230) + i * r(98);
+    const rar = RARITY[item.rarity] ?? RARITY.common;
+    const box = this.add.rectangle(W/2, y, r(300), r(82), 0x08080e)
+      .setStrokeStyle(r(3), rar.color).setInteractive({ useHandCursor: true });
+
+    const rarTxt = this.add.text(W/2, y - r(30), rar.label, {
+      fontFamily: 'monospace', fontSize: fs(8), color: rar.hex
+    }).setOrigin(0.5);
+
+    const lbl = this.add.text(W/2, y - r(14), item.label, {
+      fontFamily: 'monospace', fontStyle: 'bold', fontSize: fs(15), color: item.color
+    }).setOrigin(0.5);
+
+    const desc = this.add.text(W/2, y + r(5), item.desc, {
+      fontFamily: 'monospace', fontSize: fs(9), color: '#556677'
+    }).setOrigin(0.5);
+
+    const costTxt = this.add.text(W/2, y + r(24), `${item.cost} G`, {
+      fontFamily: 'monospace', fontStyle: 'bold', fontSize: fs(13), color: '#ccaa00'
+    }).setOrigin(0.5);
+
+    box.on('pointerover',  () => { if (this.gold >= item.cost) box.setFillStyle(0x0d1020); });
+    box.on('pointerout',   () => box.setFillStyle(0x08080e));
+    box.on('pointerdown',  () => this.buyItem(item));
+
+    const btn = { item, box, lbl, rarTxt, desc, costTxt };
+    this.itemBtns.push(btn);
+    this.refreshItem(btn);
+  }
+
+  buyItem(item) {
+    const count = this.inventory.filter(k => k === item.key).length;
+    const max   = item.maxStack ?? Infinity;
+    if (count >= max && max !== Infinity) return;
+    if (this.gold < item.cost) {
+      const btn = this.itemBtns.find(b => b.item === item);
+      if (btn) this.tweens.add({
+        targets: btn.box, x: { from: btn.box.x - r(7), to: btn.box.x },
+        duration: 55, yoyo: true, repeat: 3
+      });
+      return;
+    }
+    this.gold -= item.cost;
+    this.inventory.push(item.key);
+    item.onBuy?.(this);
+    this.goldTxt.setText(`GOLD:  ${this.gold}`);
+    this.statsTxt.setText(this.statsStr());
+    this.cameras.main.flash(100, 10, 25, 8);
+    this.itemBtns.forEach(b => this.refreshItem(b));
+  }
+
+  refreshItem({ item, box, lbl, rarTxt, costTxt }) {
+    const count  = this.inventory.filter(k => k === item.key).length;
+    const max    = item.maxStack ?? Infinity;
+    const maxed  = max !== Infinity && count >= max;
+    const ok     = !maxed && this.gold >= item.cost;
+    const rar    = RARITY[item.rarity] ?? RARITY.common;
+    const alpha  = maxed ? 0.4 : ok ? 1.0 : 0.3;
+    lbl.setAlpha(alpha);
+    rarTxt.setAlpha(alpha);
+    let costStr;
+    if (maxed)               costStr = 'MAXED';
+    else if (count > 0 && max !== Infinity) costStr = `Lv${count + 1}  ${item.cost}G`;
+    else                     costStr = `${item.cost} G`;
+    costTxt.setText(costStr);
+    costTxt.setAlpha(maxed ? 0.35 : ok ? 1.0 : 0.3);
+    box.setStrokeStyle(r(3), maxed ? 0x1a1a1a : rar.color, maxed ? 0.3 : ok ? 1.0 : 0.4);
+  }
+
+  updateRerollShopBtn() {
+    this.rerollBtn.setColor(this.gold >= 5 ? '#44aa44' : '#443333');
+  }
+
+  rerollShop() {
+    if (this.gold < 5) {
+      this.tweens.add({
+        targets: this.rerollBtn,
+        x: { from: this.rerollBtn.x - r(5), to: this.rerollBtn.x },
+        duration: 55, yoyo: true, repeat: 3
+      });
+      return;
+    }
+    this.gold -= 5;
+    this.goldTxt.setText(`GOLD:  ${this.gold}`);
+    this.itemBtns.forEach(b => { b.box.destroy(); b.lbl.destroy(); b.rarTxt.destroy(); b.desc.destroy(); b.costTxt.destroy(); });
+    this.itemBtns = [];
+    this.shopOffer = this.computeOffer();
+    this.shopOffer.forEach((item, i) => this.buildItem(item, i));
+    this.cameras.main.flash(80, 5, 15, 8);
+    this.updateRerollShopBtn();
+  }
+
+  proceed() {
+    this.scene.start('Pinball', {
+      level:     this.level,
+      score:     this.score,
+      ballsLeft: this.ballsLeft,
+      hp:        this.maxHP,
+      maxHP:     this.maxHP,
+      gold:      this.gold,
+      inventory: [...this.inventory],
+    });
+  }
+}
+
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: W, height: H,
+  backgroundColor: '#060610',
+  scale: {
+    mode: Phaser.Scale.NONE,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+  physics: {
+    default: 'matter',
+    matter: {
+      gravity: { y: GRAVITY * SUBSTEPS },
+      positionIterations: 10,
+      velocityIterations: 10
+    }
+  },
+  scene: [Pinball, Shop]
+});
+</script>
+</body>
+</html>
