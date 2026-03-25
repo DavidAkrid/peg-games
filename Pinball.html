@@ -1028,16 +1028,17 @@ class Pinball extends Phaser.Scene {
     const deathEmitter = deathMgr.createEmitter({
       x:        { min: BX1, max: BX2 },
       y:        H,
-      speedX:   { min: -60, max: 60 },
-      speedY:   { min: -80, max: -400 },
-      scale:    { start: 1.0, end: 0 },
-      lifespan: { min: 500, max: 1200 },
+      speedX:   { min: -40, max: 40 },
+      speedY:   { min: -60, max: -280 },
+      scale:    { start: 0.8, end: 0 },
+      alpha:    { start: 0.35, end: 0 },
+      lifespan: { min: 600, max: 1400 },
       tint:     [0xff3333, 0xff6600, 0xffaa00, 0xffffff],
-      blendMode: 'ADD', gravityY: -80, frequency: 10, quantity: 4,
+      blendMode: 'ADD', gravityY: -40, frequency: 18, quantity: 3,
     });
-    this.time.delayedCall(400, () => {
+    this.time.delayedCall(250, () => {
       deathEmitter.stop();
-      this.time.delayedCall(1200, () => deathMgr.destroy());
+      this.time.delayedCall(1500, () => deathMgr.destroy());
     });
     this.cameras.main.shake(200, 0.011);
     this.cameras.main.flash(160, 200, 40, 40, false);
@@ -1665,10 +1666,16 @@ class Shop extends Phaser.Scene {
     const cost = stackedCost(item, count);
     if (this.gold < cost) {
       const btn = this.itemBtns.find(b => b.item === item);
-      if (btn) this.tweens.add({
-        targets: btn.box, x: { from: btn.box.x - r(7), to: btn.box.x },
-        duration: 55, yoyo: true, repeat: 3
-      });
+      if (btn) {
+        const ox = btn.originX ?? (btn.originX = btn.box.x);
+        this.tweens.killTweensOf(btn.box);
+        btn.box.x = ox;
+        this.tweens.add({
+          targets: btn.box, x: { from: ox - r(7), to: ox },
+          duration: 55, yoyo: true, repeat: 3,
+          onComplete: () => { btn.box.x = ox; }
+        });
+      }
       return;
     }
     this.gold -= cost;
