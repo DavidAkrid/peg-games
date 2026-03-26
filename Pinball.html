@@ -391,6 +391,11 @@ registerItem({
   cost: 10, color: '#ff88cc', rarity: 'legendary', maxStack: 4,
 });
 
+registerItem({
+  key: 'aimControl', label: 'Aim Control', desc: 'Steer launch direction with ← →. Stack for accuracy.',
+  cost: 7, color: '#88ccff', rarity: 'uncommon', maxStack: 4,
+});
+
 // ─── Scene ────────────────────────────────────────────────────────────────────
 class Pinball extends Phaser.Scene {
   constructor() { super('Pinball'); }
@@ -404,12 +409,15 @@ class Pinball extends Phaser.Scene {
     this.maxHP     = data.maxHP     ?? 5;
     this.gold      = data.gold      ?? 0;
     this.inventory = [...(data.inventory ?? [])];
+    this.scrollIn  = data.scrollIn  ?? false;
   }
 
   // Derived from inventory — no separate flag needed
   get hasMidFlippers() { return this.inventory.includes('midFlippers'); }
 
   create() {
+    if (this.scrollIn) this.cameras.main.scrollY = H;
+
     this.launched        = false;
     this.lockUnlocked    = false;
     this.levelComplete   = false;
@@ -846,6 +854,8 @@ class Pinball extends Phaser.Scene {
       fontSize: fs(12), color: '#2a2a44', fontFamily: 'monospace', align: 'center'
     }).setOrigin(0.5).setDepth(22);
 
+    this.aimArrowGfx = this.add.graphics().setDepth(11);
+
     this.dbgToggle = this.add.text(BX1+r(5), sub, '⚙ DBG', {
       fontSize: fs(11), color: '#334455', fontFamily: 'monospace',
       backgroundColor: '#05050a', padding: { x: r(5), y: r(3) }
@@ -855,6 +865,15 @@ class Pinball extends Phaser.Scene {
       this.debugPanel?.setVisible(vis);
       this.dbgToggle.setColor(vis ? '#55aacc' : '#334455');
     });
+
+    if (this.scrollIn) {
+      this.tweens.add({
+        targets:  this.cameras.main,
+        scrollY:  0,
+        duration: 700,
+        ease:     'Power2.easeInOut',
+      });
+    }
   }
 
   refreshHP() {
@@ -1050,6 +1069,7 @@ class Pinball extends Phaser.Scene {
     this.balls.push(ball);
     this.launchBall = ball;
     this.launched = false;
+    this.aimAngle = 0;
     this.launchTxt.setVisible(true);
     fireHook(this, 'onBallSpawn');
     this.refreshHP();
@@ -1334,6 +1354,8 @@ class Pinball extends Phaser.Scene {
 
   nextLevel() {
     if (this.escapeHint) { this.escapeHint.destroy(); this.escapeHint = null; }
+    if (this.guideMgr)   { this.guideMgr.destroy();   this.guideMgr   = null; }
+
     // Level clear celebration burst
     const burst = this.add.particles('dot').setDepth(28);
     const burstEmitter = burst.createEmitter({
@@ -1358,6 +1380,7 @@ class Pinball extends Phaser.Scene {
     }
     this.balls = [];
 
+    // Level clear overlay (world space — scrolls out with the board)
     const ox = W/2, oy = H/2 - r(60);
     this.add.rectangle(ox, oy, r(310), r(80), 0x040408, 0.96).setDepth(30);
     this.add.text(ox, oy - r(14), `LEVEL  ${this.level}  CLEAR`, {
@@ -1369,16 +1392,25 @@ class Pinball extends Phaser.Scene {
 
     this.gold += 5;
     fireHook(this, 'onLevelClear');
-    this.time.delayedCall(1400, () => {
-      this.scene.start('Shop', {
-        level:     this.level + 1,
-        score:     this.score,
-        ballsLeft: this.ballsLeft + 3,
-        hp:        this.maxHP,
-        maxHP:     this.maxHP,
-        gold:      this.gold,
-        inventory: [...this.inventory],
-      });
+
+    // Launch Shop immediately so it builds its UI in the background
+    this.scene.launch('Shop', {
+      level:     this.level + 1,
+      score:     this.score,
+      ballsLeft: this.ballsLeft + 3,
+      hp:        this.maxHP,
+      maxHP:     this.maxHP,
+      gold:      this.gold,
+      inventory: [...this.inventory],
+      scrollIn:  true,
+    });
+
+    this.tweens.add({
+      targets:  this.cameras.main,
+      scrollY:  -H,
+      duration: 700,
+      ease:     'Power2.easeInOut',
+      onComplete: () => this.scene.stop(),
     });
   }
 
@@ -1386,13 +1418,59 @@ class Pinball extends Phaser.Scene {
 
   update(time, delta) {
     const k = this.keys;
+    const aimCount = this.inventory.filter(i => i === 'aimControl').length;
+
+    // Aim Control — rotate launch direction before firing
+    if (!this.launched && this.launchBall && aimCount > 0) {
+      const rotSpeed = Phaser.Math.DegToRad(1.8);
+      if (k.left.isDown || k.a.isDown)  this.aimAngle -= rotSpeed;
+      if (k.right.isDown || k.d.isDown) this.aimAngle += rotSpeed;
+      this.aimAngle = Phaser.Math.Clamp(this.aimAngle, -Phaser.Math.DegToRad(40), Phaser.Math.DegToRad(40));
+    }
+
+    // Draw aim arrow
+    this.aimArrowGfx.clear();
+    if (!this.launched && this.launchBall && aimCount > 0) {
+      const bx = this.launchBall.body.position.x;
+      const by = this.launchBall.body.position.y;
+      const dx = Math.sin(this.aimAngle);
+      const dy = -Math.cos(this.aimAngle);
+      const start = BALL_R + r(3);
+      const len   = r(28);
+      const tx = bx + dx * (start + len);
+      const ty = by + dy * (start + len);
+      const headLen  = r(7);
+      const headAng  = 0.45;
+      const arrAngle = Math.atan2(dy, dx);
+      this.aimArrowGfx.lineStyle(r(1.5), 0x88ccff, 0.65);
+      this.aimArrowGfx.beginPath();
+      this.aimArrowGfx.moveTo(bx + dx * start, by + dy * start);
+      this.aimArrowGfx.lineTo(tx, ty);
+      this.aimArrowGfx.strokePath();
+      this.aimArrowGfx.beginPath();
+      this.aimArrowGfx.moveTo(tx, ty);
+      this.aimArrowGfx.lineTo(tx - headLen * Math.cos(arrAngle - headAng), ty - headLen * Math.sin(arrAngle - headAng));
+      this.aimArrowGfx.moveTo(tx, ty);
+      this.aimArrowGfx.lineTo(tx - headLen * Math.cos(arrAngle + headAng), ty - headLen * Math.sin(arrAngle + headAng));
+      this.aimArrowGfx.strokePath();
+    }
 
     if (Phaser.Input.Keyboard.JustDown(k.space) && !this.launched && this.launchBall) {
       MBody.setStatic(this.launchBall.body, false);
-      const xSign = Math.random() < 0.5 ? 1 : -1;
-      MBody.setVelocity(this.launchBall.body, {
-        x: xSign * Phaser.Math.FloatBetween(0.8 * S, 2.0 * S), y: -7 * S
-      });
+      let vx, vy;
+      if (aimCount > 0) {
+        const spreadDeg = [20, 12, 5, 1][Math.min(aimCount - 1, 3)];
+        const spread = Phaser.Math.DegToRad(spreadDeg);
+        const angle  = this.aimAngle + Phaser.Math.FloatBetween(-spread, spread);
+        const spd = 7.5 * S;
+        vx = Math.sin(angle) * spd;
+        vy = -Math.cos(angle) * spd;
+      } else {
+        const xSign = Math.random() < 0.5 ? 1 : -1;
+        vx = xSign * Phaser.Math.FloatBetween(0.8 * S, 2.5 * S);
+        vy = -7 * S;
+      }
+      MBody.setVelocity(this.launchBall.body, { x: vx, y: vy });
       this.launched = true;
       this.launchBall = null;
       this.launchTxt.setVisible(false);
@@ -1584,7 +1662,9 @@ class Shop extends Phaser.Scene {
     this.maxHP     = data.maxHP;
     this.gold      = data.gold;
     this.inventory = [...(data.inventory ?? [])];
-    this.shopOffer = this.computeOffer();
+    this.scrollIn   = data.scrollIn ?? false;
+    this._proceeding = false;
+    this.shopOffer  = this.computeOffer();
   }
 
   computeOffer() {
@@ -1601,6 +1681,9 @@ class Shop extends Phaser.Scene {
   }
 
   create() {
+    // If scrolling in from Pinball, start camera above the shop content
+    if (this.scrollIn) this.cameras.main.scrollY = H;
+
     window.updateObjective?.(0, 0);   // clear objective — not relevant in shop
     window.updateEquipped?.(this.inventory);
     window.updateSideHP?.([this.hp], this.maxHP);
@@ -1717,6 +1800,16 @@ class Shop extends Phaser.Scene {
     cont.on('pointerout',  () => cont.setColor('#00ffaa'));
     cont.on('pointerdown', () => this.proceed());
     this.input.keyboard.once('keydown-SPACE', () => this.proceed());
+
+    // Scroll shop down into view, synchronized with Pinball's scroll-out
+    if (this.scrollIn) {
+      this.tweens.add({
+        targets:  this.cameras.main,
+        scrollY:  0,
+        duration: 700,
+        ease:     'Power2.easeInOut',
+      });
+    }
   }
 
   statsStr() {
@@ -1826,7 +1919,10 @@ class Shop extends Phaser.Scene {
   }
 
   proceed() {
-    this.scene.start('Pinball', {
+    if (this._proceeding) return;
+    this._proceeding = true;
+
+    this.scene.launch('Pinball', {
       level:     this.level,
       score:     this.score,
       ballsLeft: this.ballsLeft,
@@ -1834,6 +1930,15 @@ class Shop extends Phaser.Scene {
       maxHP:     this.maxHP,
       gold:      this.gold,
       inventory: [...this.inventory],
+      scrollIn:  true,
+    });
+
+    this.tweens.add({
+      targets:  this.cameras.main,
+      scrollY:  -H,
+      duration: 700,
+      ease:     'Power2.easeInOut',
+      onComplete: () => this.scene.stop(),
     });
   }
 }
