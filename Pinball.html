@@ -292,11 +292,6 @@ const fireHook = (scene, hook, ...args) => {
     ITEMS[key]?.[hook]?.(scene, count, ...args);
 };
 
-registerItem({
-  key: 'plusBall', label: '+1 Ball', desc: 'One extra ball per purchase',
-  cost: 3, color: '#44aa44', rarity: 'common', maxStack: Infinity, transient: true,
-  onBuy: s => { s.ballsLeft++; },
-});
 
 registerItem({
   key: 'plusMaxHP', label: '+1 Max HP', desc: 'Permanently expand your max health',
@@ -488,7 +483,7 @@ class Pinball extends Phaser.Scene {
   // ─── Background ──────────────────────────────────────────────────────────────
 
   buildBG() {
-    const { bg, grid } = getBgColors(this.level);
+    const { bg, grid, accent } = getBgColors(this.level);
     this.add.rectangle(W / 2, H / 2, W, H, bg);
     const g = this.add.graphics();
     // glow pass
@@ -499,6 +494,23 @@ class Pinball extends Phaser.Scene {
     g.lineStyle(1, grid, 0.9);
     for (let x = BX1; x <= BX2; x += r(30)) g.lineBetween(x, BY1, x, H);
     for (let y = BY1; y <= H;   y += r(30)) g.lineBetween(BX1, y, BX2, y);
+
+    // Ambient drifting particles — faint, theme-colored, from both sides
+    const accentHex = parseInt(accent.replace('#', ''), 16);
+    const ambParts = this.add.particles('dot').setDepth(1);
+    const ambCfg = (fromLeft) => ({
+      x: fromLeft ? BX1 : BX2,
+      y: { min: BY1, max: H },
+      speedX: fromLeft ? { min: 8, max: 25 } : { min: -25, max: -8 },
+      speedY: { min: -6, max: 6 },
+      scale:  { start: 0.55, end: 0 },
+      alpha:  { start: 0.18, end: 0 },
+      lifespan: { min: 4000, max: 8000 },
+      tint: accentHex,
+      blendMode: 'ADD', gravityY: 0, frequency: 200, quantity: 1,
+    });
+    ambParts.createEmitter(ambCfg(true));
+    ambParts.createEmitter(ambCfg(false));
   }
 
   // ─── Walls ───────────────────────────────────────────────────────────────────
@@ -1511,7 +1523,7 @@ class Pinball extends Phaser.Scene {
         myKey:     this.myKey,
         level:     this.level,
         score:     this.score,
-        ballsLeft: this.ballsLeft + 3,
+        ballsLeft: this.ballsLeft + 1,
         hp:        this.maxHP,
         maxHP:     this.maxHP,
         gold:      this.gold,
@@ -1523,7 +1535,7 @@ class Pinball extends Phaser.Scene {
         myKey:     this.nextKey,
         level:     this.level + 1,
         score:     this.score,
-        ballsLeft: this.ballsLeft + 3,
+        ballsLeft: this.ballsLeft + 1,
         hp:        this.maxHP,
         maxHP:     this.maxHP,
         gold:      this.gold,
@@ -1796,6 +1808,7 @@ class Shop extends Phaser.Scene {
     this.scrollIn    = data.scrollIn ?? false;
     this._proceeding = false;
     this.fromKey     = data.myKey ?? 'Pinball';
+    this.ballBuyCost = 3;
     this.shopOffer   = this.computeOffer();
   }
 
@@ -1924,6 +1937,15 @@ class Shop extends Phaser.Scene {
     this.rerollBtn.on('pointerdown', () => this.rerollShop());
     this.updateRerollShopBtn();
 
+    this.ballBtn = this.add.text(W/2, r(530), `+1 BALL  -${this.ballBuyCost}G`, {
+      fontFamily: 'monospace', fontStyle: 'bold', fontSize: fs(13),
+      backgroundColor: '#080d05', padding: { x: r(14), y: r(7) }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.ballBtn.on('pointerover', () => { if (this.gold >= this.ballBuyCost) this.ballBtn.setColor('#aaffcc'); });
+    this.ballBtn.on('pointerout',  () => this.updateBallBtn());
+    this.ballBtn.on('pointerdown', () => this.buyBall());
+    this.updateBallBtn();
+
     const cont = this.add.text(W/2, H - r(60), '▶  CONTINUE', {
       ...ts, fontSize: fs(16), color: '#00ffaa',
       backgroundColor: '#021a0e', padding: { x: r(18), y: r(9) }
@@ -2029,6 +2051,29 @@ class Shop extends Phaser.Scene {
 
   updateRerollShopBtn() {
     this.rerollBtn.setColor(this.gold >= 5 ? '#44aa44' : '#443333');
+  }
+
+  updateBallBtn() {
+    this.ballBtn.setColor(this.gold >= this.ballBuyCost ? '#44aa44' : '#443333');
+  }
+
+  buyBall() {
+    if (this.gold < this.ballBuyCost) {
+      this.tweens.add({
+        targets: this.ballBtn,
+        x: { from: this.ballBtn.x - r(5), to: this.ballBtn.x },
+        duration: 55, yoyo: true, repeat: 3,
+      });
+      return;
+    }
+    this.gold -= this.ballBuyCost;
+    this.ballsLeft++;
+    this.ballBuyCost += 3;
+    this.goldTxt.setText(`GOLD:  ${this.gold}`);
+    this.ballBtn.setText(`+1 BALL  -${this.ballBuyCost}G`);
+    this.updateBallBtn();
+    this.updateRerollShopBtn();
+    window.updateStats?.(this.level, this.score, this.gold, this.ballsLeft);
   }
 
   rerollShop() {
