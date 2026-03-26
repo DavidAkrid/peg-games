@@ -40,7 +40,10 @@
     #side-score .stat-num { color: #ccaa00; }
     #side-level { margin-bottom: 10px; }
     #side-score { margin-top: 10px; }
-    #side-balls { margin-top: 6px; }
+    #side-balls { margin-top: 10px; }
+    #side-balls .ball-count { font-size: 42px; font-weight: bold; line-height: 1.1; margin-bottom: 4px; }
+    #side-balls .ball-dots  { font-size: 16px; letter-spacing: 3px; line-height: 1.4; }
+    #side-balls .ball-label { font-size: 10px; letter-spacing: 2px; color: #2a3a55; margin-bottom: 2px; }
     .sep { border: none; border-top: 1px solid #1a2233; margin: 8px 0; }
     .c-purple { color: #aa55ff; } .c-gold { color: #ccaa00; }
     .c-red    { color: #cc3333; } .c-blue { color: #4488cc; }
@@ -172,8 +175,14 @@ window.updateStats = function(level, score, gold, balls) {
   if (scoreEl) scoreEl.innerHTML =
     `<div class="stat-label">SCORE</div><div class="stat-big">${score}</div>`
     + `<div class="stat-label" style="margin-top:6px">GOLD</div><div class="stat-num">${gold}</div>`;
-  if (ballsEl) ballsEl.innerHTML =
-    `<div class="stat-label">BALLS</div><div class="stat-num">${balls}</div>`;
+  if (ballsEl) {
+    const ballColor = balls <= 1 ? '#ff4444' : balls <= 3 ? '#ffaa22' : '#44aa66';
+    const dots = '⬤ '.repeat(Math.min(balls, 8)).trim() + (balls > 8 ? ` +${balls - 8}` : '');
+    ballsEl.innerHTML =
+      `<div class="ball-label">BALLS</div>`
+      + `<div class="ball-count" style="color:${ballColor}">${balls}</div>`
+      + `<div class="ball-dots" style="color:${ballColor};opacity:0.5">${dots}</div>`;
+  }
 };
 
 const SUBSTEPS   = 3;
@@ -1255,6 +1264,25 @@ class Pinball extends Phaser.Scene {
     } else {
       this.hp = this.maxHP;
       this.refreshHP();
+
+      // "X balls remaining" flash
+      const remaining = this.ballsLeft;
+      const msgColor  = remaining <= 1 ? '#ff4444' : remaining <= 3 ? '#ffaa22' : '#aabbff';
+      const msgText   = remaining === 1 ? 'LAST BALL' : `${remaining} BALLS LEFT`;
+      const msg = this.add.text(W/2, H/2 - r(30), msgText, {
+        fontFamily: 'monospace', fontStyle: 'bold', fontSize: fs(28),
+        color: msgColor, stroke: '#000000', strokeThickness: r(5),
+      }).setOrigin(0.5).setDepth(32).setAlpha(0);
+      this.tweens.add({
+        targets: msg, alpha: 1, duration: 200, ease: 'Power2.easeOut',
+        onComplete: () => {
+          this.time.delayedCall(700, () => {
+            this.tweens.add({ targets: msg, alpha: 0, duration: 400, ease: 'Power2.easeIn',
+              onComplete: () => msg.destroy() });
+          });
+        },
+      });
+
       this.time.delayedCall(900, () => this.spawnBall());
     }
   }
@@ -1523,7 +1551,7 @@ class Pinball extends Phaser.Scene {
         myKey:     this.myKey,
         level:     this.level,
         score:     this.score,
-        ballsLeft: this.ballsLeft + 1,
+        ballsLeft: this.ballsLeft + 3,
         hp:        this.maxHP,
         maxHP:     this.maxHP,
         gold:      this.gold,
@@ -1535,7 +1563,7 @@ class Pinball extends Phaser.Scene {
         myKey:     this.nextKey,
         level:     this.level + 1,
         score:     this.score,
-        ballsLeft: this.ballsLeft + 1,
+        ballsLeft: this.ballsLeft + 3,
         hp:        this.maxHP,
         maxHP:     this.maxHP,
         gold:      this.gold,
