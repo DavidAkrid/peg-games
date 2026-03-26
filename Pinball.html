@@ -18,7 +18,7 @@
     }
     #objective { font-size: 13px; line-height: 1.8; color: #3a4a66; margin-bottom: 14px; }
     #objective h3 { margin: 0 0 6px 0; font-size: 10px; color: #2a3a55; letter-spacing: 2px; }
-    #objective .obj-label { font-size: 11px; color: #445566; letter-spacing: 1px; }
+    #objective .obj-label { font-size: 28px; font-weight: bold; color: #445566; letter-spacing: 1px; line-height: 1.2; margin-bottom: 4px; }
     #objective .obj-value { font-size: 22px; font-weight: bold; color: #6677bb; line-height: 1.3; }
     #objective .obj-done  { font-size: 22px; font-weight: bold; color: #00cc88; line-height: 1.3; }
     #objective .obj-bar-track { width: 90px; height: 6px; background: #0d1222; border-radius: 3px; margin-top: 8px; }
@@ -42,7 +42,6 @@
     #side-score { margin-top: 10px; }
     #side-balls { margin-top: 10px; }
     #side-balls .ball-count { font-size: 42px; font-weight: bold; line-height: 1.1; margin-bottom: 4px; }
-    #side-balls .ball-dots  { font-size: 16px; letter-spacing: 3px; line-height: 1.4; }
     #side-balls .ball-label { font-size: 10px; letter-spacing: 2px; color: #2a3a55; margin-bottom: 2px; }
     .sep { border: none; border-top: 1px solid #1a2233; margin: 8px 0; }
     .c-purple { color: #aa55ff; } .c-gold { color: #ccaa00; }
@@ -68,8 +67,8 @@
   <div><span class="c-green">SHIFT</span>       shake board</div>
   <hr class="sep">
   <h3>GOAL</h3>
-  <div>Hit the score target to</div>
-  <div>open the top barrier,</div>
+  <div>Complete the level objective</div>
+  <div>to open the top barrier,</div>
   <div>then shoot the ball through.</div>
   <hr class="sep">
   <div class="c-dim">↺ REROLL pegs  -2G</div>
@@ -177,11 +176,9 @@ window.updateStats = function(level, score, gold, balls) {
     + `<div class="stat-label" style="margin-top:6px">GOLD</div><div class="stat-num">${gold}</div>`;
   if (ballsEl) {
     const ballColor = balls <= 1 ? '#ff4444' : balls <= 3 ? '#ffaa22' : '#44aa66';
-    const dots = '⬤ '.repeat(Math.min(balls, 8)).trim() + (balls > 8 ? ` +${balls - 8}` : '');
     ballsEl.innerHTML =
       `<div class="ball-label">BALLS</div>`
-      + `<div class="ball-count" style="color:${ballColor}">${balls}</div>`
-      + `<div class="ball-dots" style="color:${ballColor};opacity:0.5">${dots}</div>`;
+      + `<div class="ball-count" style="color:${ballColor}">${balls}</div>`;
   }
 };
 
@@ -247,12 +244,12 @@ function getLockConfig(level) {
 
 function getBgColors(level) {
   const themes = [
-    { bg: 0x060610, grid: 0x0c0c20, accent: '#44aaff' },
-    { bg: 0x0e0614, grid: 0x180a20, accent: '#cc66ff' },
-    { bg: 0x030d06, grid: 0x071509, accent: '#44ffaa' },
-    { bg: 0x0d0a03, grid: 0x181205, accent: '#ffcc44' },
-    { bg: 0x0d0306, grid: 0x200508, accent: '#ff6677' },
-    { bg: 0x03090d, grid: 0x051218, accent: '#44ddff' },
+    { bg: 0x060610, grid: 0x0c0c20, accent: '#44aaff', color: 0x2255aa, colorBright: 0x4488ee },
+    { bg: 0x0e0614, grid: 0x180a20, accent: '#cc66ff', color: 0x662288, colorBright: 0xaa44dd },
+    { bg: 0x030d06, grid: 0x071509, accent: '#44ffaa', color: 0x226644, colorBright: 0x44aa77 },
+    { bg: 0x0d0a03, grid: 0x181205, accent: '#ffcc44', color: 0x886622, colorBright: 0xccaa33 },
+    { bg: 0x0d0306, grid: 0x200508, accent: '#ff6677', color: 0x882233, colorBright: 0xcc4455 },
+    { bg: 0x03090d, grid: 0x051218, accent: '#44ddff', color: 0x226688, colorBright: 0x44aacc },
   ];
   return themes[(level - 1) % themes.length];
 }
@@ -444,6 +441,7 @@ class Pinball extends Phaser.Scene {
     this.nextKey      = this.myKey === 'Pinball' ? 'PinballB' : 'Pinball';
     this._goingToShop = false;
     this.shopFlagged  = false;
+    this._deathTimes  = [];
   }
 
   // Derived from inventory — no separate flag needed
@@ -492,7 +490,9 @@ class Pinball extends Phaser.Scene {
   // ─── Background ──────────────────────────────────────────────────────────────
 
   buildBG() {
-    const { bg, grid, accent } = getBgColors(this.level);
+    const { bg, grid, accent, color, colorBright } = getBgColors(this.level);
+    this.themeColor       = color;
+    this.themeColorBright = colorBright;
     this.add.rectangle(W / 2, H / 2, W, H, bg);
     const g = this.add.graphics();
     // glow pass
@@ -527,23 +527,24 @@ class Pinball extends Phaser.Scene {
   buildWalls() {
     const mid = (BX1 + BX2) / 2, wallH = H * 2;
 
+    const tc = this.themeColor, tcb = this.themeColorBright;
     const g = this.add.graphics().setDepth(4);
-    g.lineStyle(r(8), 0x2244aa, 0.15);
+    g.lineStyle(r(8), tc, 0.15);
     g.moveTo(BX1, BY1); g.lineTo(BX1, H);
     g.moveTo(BX2, BY1); g.lineTo(BX2, H);
     g.strokePath();
-    g.lineStyle(2, 0x3355cc, 1);
+    g.lineStyle(2, tcb, 1);
     g.moveTo(BX1, BY1); g.lineTo(BX1, H);
     g.moveTo(BX2, BY1); g.lineTo(BX2, H);
     g.strokePath();
 
     this.topBorderGfx = this.add.graphics().setDepth(4);
-    const tby = r(4); // draw line offset from Y=0 so glow isn't clipped
-    this.topBorderGfx.lineStyle(r(8), 0x2244aa, 0.15);
+    const tby = r(4);
+    this.topBorderGfx.lineStyle(r(8), tc, 0.15);
     this.topBorderGfx.moveTo(BX1 - r(4), tby);
     this.topBorderGfx.lineTo(BX2 + r(4), tby);
     this.topBorderGfx.strokePath();
-    this.topBorderGfx.lineStyle(2, 0x3355cc, 1);
+    this.topBorderGfx.lineStyle(2, tcb, 1);
     this.topBorderGfx.moveTo(BX1 - r(4), tby);
     this.topBorderGfx.lineTo(BX2 + r(4), tby);
     this.topBorderGfx.strokePath();
@@ -559,19 +560,18 @@ class Pinball extends Phaser.Scene {
 
   buildGutters() {
     const lStartY = LP.y - (LP.x - BX1) * Math.tan(FA);
-    this.addSeg(BX1, lStartY, LP.x, LP.y, 0x1e3060, 30);
+    this.addSeg(BX1, lStartY, LP.x, LP.y, this.themeColor, this.themeColorBright, 30);
     const rStartY = RP.y - (BX2 - RP.x) * Math.tan(FA);
-    this.addSeg(BX2, rStartY, RP.x, RP.y, 0x1e3060, 30);
+    this.addSeg(BX2, rStartY, RP.x, RP.y, this.themeColor, this.themeColorBright, 30);
   }
 
-  addSeg(x1, y1, x2, y2, color, height = 8) {
+  addSeg(x1, y1, x2, y2, color, colorBright, height = 8) {
     const dx = x2-x1, dy = y2-y1;
     const len = Math.sqrt(dx*dx+dy*dy);
     const body = this.matter.add.rectangle((x1+x2)/2, (y1+y2)/2,
       len, height,
-      { isStatic: true, friction: 0, restitution: 0.3, label: 'wall' });
+      { isStatic: true, friction: 0, restitution: 0.6, label: 'wall' });
     MBody.setAngle(body, Math.atan2(dy, dx));
-    // Draw filled polygon matching the physics body exactly
     const angle = Math.atan2(dy, dx);
     const cx = (x1+x2)/2, cy = (y1+y2)/2;
     const hw = len/2, hh = height/2;
@@ -581,7 +581,7 @@ class Pinball extends Phaser.Scene {
     }));
     const g = this.add.graphics().setDepth(2);
     g.fillStyle(color, 0.55); g.fillPoints(corners, true);
-    g.lineStyle(2, 0x3355cc, 1); g.strokePoints(corners, true);
+    g.lineStyle(2, colorBright, 1); g.strokePoints(corners, true);
   }
 
   // ─── Flippers ─────────────────────────────────────────────────────────────────
@@ -590,7 +590,7 @@ class Pinball extends Phaser.Scene {
     const mkFlipper = (cx, cy, angle) => {
       const b = this.matter.add.rectangle(cx, cy, FL, FH, {
         isStatic: true, label: 'flipper', friction: 0.05,
-        restitution: 0.15, chamfer: { radius: 5 }
+        restitution: 0.4, chamfer: { radius: 5 }
       });
       MBody.setAngle(b, angle);
       return b;
@@ -602,7 +602,7 @@ class Pinball extends Phaser.Scene {
     this.lFlipGfx  = this.add.graphics().setDepth(5);
     this.rFlipGfx  = this.add.graphics().setDepth(5);
     const pd = this.add.graphics().setDepth(6);
-    pd.fillStyle(0x4466bb);
+    pd.fillStyle(this.themeColorBright);
     pd.fillCircle(LP.x, LP.y, 5); pd.fillCircle(RP.x, RP.y, 5);
 
     // Mid flippers — only if purchased
@@ -612,7 +612,7 @@ class Pinball extends Phaser.Scene {
       const mkFlipper2 = (cx, cy, angle) => {
         const b = this.matter.add.rectangle(cx, cy, FL2, FH2, {
           isStatic: true, label: 'flipper', friction: 0.05,
-          restitution: 0.15, chamfer: { radius: 4 }
+          restitution: 0.4, chamfer: { radius: 4 }
         });
         MBody.setAngle(b, angle);
         return b;
@@ -624,7 +624,7 @@ class Pinball extends Phaser.Scene {
       this.lFlipGfx2  = this.add.graphics().setDepth(5);
       this.rFlipGfx2  = this.add.graphics().setDepth(5);
       const pd2 = this.add.graphics().setDepth(6);
-      pd2.fillStyle(0x336699);
+      pd2.fillStyle(this.themeColorBright);
       pd2.fillCircle(LP2.x, LP2.y, 4); pd2.fillCircle(RP2.x, RP2.y, 4);
     }
   }
@@ -644,9 +644,10 @@ class Pinball extends Phaser.Scene {
       x: x + cx*Math.cos(a) - cy*Math.sin(a),
       y: y + cx*Math.sin(a) + cy*Math.cos(a)
     }));
-    gfx.fillStyle(active ? 0x3388ee : 0x1a3366);
+    const tc = this.themeColor, tcb = this.themeColorBright;
+    gfx.fillStyle(active ? tcb : tc);
     gfx.fillPoints(corners, true);
-    gfx.lineStyle(2, active ? 0x77bbff : 0x335588);
+    gfx.lineStyle(2, active ? (tcb + 0x444444) & 0xffffff : tcb, 1);
     gfx.strokePoints(corners, true);
   }
 
@@ -659,7 +660,7 @@ class Pinball extends Phaser.Scene {
     const types = [ { type: 'gold', r: r(20) } ];
 
     // 33% chance to spawn exactly one shop peg per level (not on lock levels)
-    if (!isLockLevel && Math.random() < 0.33) types.push({ type: 'shop', r: r(22) });
+    if (!isLockLevel && Math.random() < 0.50) types.push({ type: 'shop', r: r(22) });
     if (isLockLevel) {
       const { pegs, hitsEach } = getLockConfig(this.level);
       for (let i = 0; i < pegs; i++)
@@ -734,7 +735,7 @@ class Pinball extends Phaser.Scene {
       let labelTxt = null, countTxt = null;
       if (b.type === 'shop') {
         labelTxt = this.add.text(b.x, b.y, 'SHOP',
-          { ...ts, fontSize: fs(9), color: '#aaffcc' }).setOrigin(0.5).setDepth(4);
+          { ...ts, fontSize: fs(9), color: '#ffcc66' }).setOrigin(0.5).setDepth(4);
       } else if (b.type === 'gold') {
         labelTxt = this.add.text(b.x, b.y, '$',
           { ...ts, fontSize: fs(14), color: '#ffdd44' }).setOrigin(0.5).setDepth(4);
@@ -748,7 +749,7 @@ class Pinball extends Phaser.Scene {
       }
       let glowGfx = null;
       if ((b.type === 'score' && b.tier === 5) || b.type === 'lock' || b.type === 'shop') {
-        const glowColor = b.type === 'lock' ? 0xaa44ff : b.type === 'shop' ? 0x44ffaa : 0xeeffff;
+        const glowColor = b.type === 'lock' ? 0xaa44ff : b.type === 'shop' ? 0xff8800 : 0xeeffff;
         const dur       = b.type === 'lock' ? 900 : b.type === 'shop' ? 1100 : 1400;
         glowGfx = this.add.graphics().setDepth(2);
         // Radial gradient glow: concentric rings, inner bright → outer faint
@@ -822,7 +823,7 @@ class Pinball extends Phaser.Scene {
         ? Math.min(b.hitsLanded ?? 0, (b.hitsRequired ?? 1) - 1) / Math.max((b.hitsRequired ?? 1) - 1, 1)
         : 0;
       const C = {
-        shop:   { bg: lit?0x33ffaa:0x003322, ring: lit?0x88ffdd:0x22aa66, inner: lit?0xffffff:0x115533 },
+        shop:   { bg: lit?0xff8800:0x221100, ring: lit?0xffcc66:0x883300, inner: lit?0xffffff:0x441a00 },
         gold:   { bg: lit?0xffdd00:0x1a1000, ring: lit?0xffee88:0x886600, inner: lit?0xffffff:0x443300 },
         damage: disabled
           ? { bg: 0x111111, ring: 0x333333, inner: 0x222222 }
@@ -874,6 +875,27 @@ class Pinball extends Phaser.Scene {
 
   updateRerollBtn() {
     this.rerollBtn?.setColor(this.gold >= 2 ? '#55aa55' : '#443333');
+  }
+
+  _showRerollNudge() {
+    if (this._rerollNudge) return;  // already showing
+    const nudge = this.add.text(W/2, H - r(110), '↺  struggling?  reroll  -2G', {
+      fontFamily: 'monospace', fontSize: fs(10), color: '#3a5a3a',
+    }).setOrigin(0.5).setDepth(22).setAlpha(0).setInteractive({ useHandCursor: true });
+    this._rerollNudge = nudge;
+    nudge.on('pointerover', () => { if (this.gold >= 2) nudge.setColor('#88cc88'); });
+    nudge.on('pointerout',  () => nudge.setColor('#3a5a3a'));
+    nudge.on('pointerdown', () => { this.rerollPegs(); this._dismissRerollNudge(); });
+    this.tweens.add({ targets: nudge, alpha: 1, duration: 600, ease: 'Power2.easeOut' });
+    this._rerollNudgeTimer = this.time.delayedCall(6000, () => this._dismissRerollNudge());
+  }
+
+  _dismissRerollNudge() {
+    if (!this._rerollNudge) return;
+    this._rerollNudgeTimer?.remove();
+    this.tweens.add({ targets: this._rerollNudge, alpha: 0, duration: 400, ease: 'Power2.easeIn',
+      onComplete: () => { this._rerollNudge?.destroy(); this._rerollNudge = null; }
+    });
   }
 
   // ─── HUD ─────────────────────────────────────────────────────────────────────
@@ -1247,6 +1269,14 @@ class Pinball extends Phaser.Scene {
     this.ballsLeft--;
     this.updateHUD();
 
+    // Track recent deaths — nudge reroll if 2 deaths within 12 seconds
+    const now = this.time.now;
+    this._deathTimes.push(now);
+    this._deathTimes = this._deathTimes.filter(t => now - t < 12000);
+    if (this._deathTimes.length >= 2 && this.gold >= 2) {
+      this._showRerollNudge();
+    }
+
     if (this.ballsLeft <= 0) {
       const ox = W/2, oy = H/2;
       this.add.rectangle(ox, oy, r(300), r(140), 0x040408, 0.95).setDepth(30);
@@ -1333,7 +1363,7 @@ class Pinball extends Phaser.Scene {
         if (!this.shopFlagged) {
           this.shopFlagged = true;
           this.pegPop(b.x, b.y);
-          this.showPopup(b.x, b.y - b.r, 'SHOP UNLOCKED!', '#aaffcc', [0x44ffaa, 0x88ffdd, 0xffffff]);
+          this.showPopup(b.x, b.y - b.r, 'SHOP UNLOCKED!', '#ffcc66', [0xff8800, 0xffcc66, 0xffffff]);
           // Remove hitbox and go dark
           if (b.body) { this.matter.world.remove(b.body); b.body = null; }
           b.gfx.clear();
@@ -1497,7 +1527,9 @@ class Pinball extends Phaser.Scene {
       fontSize: fs(22), color: hintColor, fontFamily: 'monospace', fontStyle: 'bold',
       stroke: '#001100', strokeThickness: r(4)
     }).setOrigin(0.5).setDepth(25);
+    const hintY = hint.y;
     this.tweens.add({ targets: hint, alpha: { from: 0.6, to: 1 }, duration: 700, ease: 'Sine.easeInOut', yoyo: true, repeat: -1 });
+    this.tweens.add({ targets: hint, y: { from: hintY - r(3), to: hintY + r(3) }, duration: 900, ease: 'Sine.easeInOut', yoyo: true, repeat: -1 });
     this.escapeHint = hint;
   }
 
@@ -1788,7 +1820,7 @@ class Pinball extends Phaser.Scene {
       // Position + ring
       ball.gfx.setPosition(x, y);
       ball.ring.clear();
-      ball.ring.lineStyle(r(3), 0x6666cc, 0.35);
+      ball.ring.lineStyle(r(3), this.themeColorBright, 0.35);
       ball.ring.strokeCircle(x, y, BALL_R);
       if (this.shieldHP > 0) {
         const shieldCol = this.shieldHP >= 3 ? 0xaa44ff : this.shieldHP === 2 ? 0x44aaff : 0x888899;
