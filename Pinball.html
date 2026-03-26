@@ -33,6 +33,14 @@
     #equipped-items h3 { margin: 0 0 5px 0; font-size: 10px; color: #2a3a55; letter-spacing: 2px; }
     #instructions { font-size: 13px; line-height: 1.9; color: #3a4a66; }
     #instructions h3 { margin: 0 0 6px 0; font-size: 11px; color: #2a3a55; letter-spacing: 2px; }
+    .stat-label { font-size: 10px; color: #2a3a55; letter-spacing: 2px; margin-bottom: 2px; }
+    .stat-big   { font-size: 22px; font-weight: bold; color: #6677bb; line-height: 1.3; margin-bottom: 4px; }
+    .stat-num   { font-size: 16px; font-weight: bold; color: #6677bb; line-height: 1.4; }
+    #side-balls .stat-num { color: #44aa66; }
+    #side-score .stat-num { color: #ccaa00; }
+    #side-level { margin-bottom: 10px; }
+    #side-score { margin-top: 10px; }
+    #side-balls { margin-top: 6px; }
     .sep { border: none; border-top: 1px solid #1a2233; margin: 8px 0; }
     .c-purple { color: #aa55ff; } .c-gold { color: #ccaa00; }
     .c-red    { color: #cc3333; } .c-blue { color: #4488cc; }
@@ -42,9 +50,12 @@
 <body>
 <div id="left-panel" class="side-panel">
   <div id="side-hp"></div>
+  <div id="side-balls"></div>
   <div id="equipped-items"><h3>EQUIPPED</h3><span class="c-dim">— none —</span></div>
 </div>
 <div id="right-panel" class="side-panel">
+<div id="side-level"></div>
+<div id="side-score"></div>
 <div id="objective"></div>
 <div id="instructions">
   <h3>CONTROLS</h3>
@@ -150,12 +161,25 @@ window.updateEquipped = function(inventory) {
   el.innerHTML = html;
 };
 
+window.updateStats = function(level, score, gold, balls) {
+  const levelEl = document.getElementById('side-level');
+  const scoreEl = document.getElementById('side-score');
+  const ballsEl = document.getElementById('side-balls');
+  if (levelEl) levelEl.innerHTML =
+    `<div class="stat-label">LEVEL</div><div class="stat-big">${level}</div>`;
+  if (scoreEl) scoreEl.innerHTML =
+    `<div class="stat-label">SCORE</div><div class="stat-big">${score}</div>`
+    + `<div class="stat-label" style="margin-top:6px">GOLD</div><div class="stat-num">${gold}</div>`;
+  if (ballsEl) ballsEl.innerHTML =
+    `<div class="stat-label">BALLS</div><div class="stat-num">${balls}</div>`;
+};
+
 const SUBSTEPS   = 3;
 const GRAVITY    = 0.9 * S;
 const MAX_BALL_V = 16 * S;
 const BALL_R     = r(10);
 
-const BX1 = r(40), BX2 = r(440), BY1 = r(40);
+const BX1 = r(40), BX2 = r(440), BY1 = 0;
 const FL  = r(82),  FH  = r(13),  FA = 0.50;
 const LP  = { x: r(152), y: r(590) };
 const RP  = { x: r(328), y: r(590) };
@@ -304,7 +328,7 @@ registerItem({
       const chance = count * 0.15 + tierBonus;
       if (Math.random() < chance) {
         s.gold++;
-        s.goldTxt.setText(`GOLD  ${s.gold}`);
+        s.updateHUD();
         s.updateRerollBtn();
         s.showPopup(b.x, b.y - b.r, '+1 GOLD', '#ffee55', [0xffdd00, 0xffaa00, 0xffffff]);
       }
@@ -398,7 +422,7 @@ registerItem({
 
 // ─── Scene ────────────────────────────────────────────────────────────────────
 class Pinball extends Phaser.Scene {
-  constructor() { super('Pinball'); }
+  constructor(key = 'Pinball') { super(key); }
 
   // Persistent cross-level state
   init(data) {
@@ -410,6 +434,8 @@ class Pinball extends Phaser.Scene {
     this.gold      = data.gold      ?? 0;
     this.inventory = [...(data.inventory ?? [])];
     this.scrollIn  = data.scrollIn  ?? false;
+    this.myKey     = data.myKey     ?? 'Pinball';
+    this.nextKey   = this.myKey === 'Pinball' ? 'PinballB' : 'Pinball';
   }
 
   // Derived from inventory — no separate flag needed
@@ -485,13 +511,14 @@ class Pinball extends Phaser.Scene {
     g.strokePath();
 
     this.topBorderGfx = this.add.graphics().setDepth(4);
+    const tby = r(4); // draw line offset from Y=0 so glow isn't clipped
     this.topBorderGfx.lineStyle(r(8), 0x2244aa, 0.15);
-    this.topBorderGfx.moveTo(BX1 - r(4), BY1);
-    this.topBorderGfx.lineTo(BX2 + r(4), BY1);
+    this.topBorderGfx.moveTo(BX1 - r(4), tby);
+    this.topBorderGfx.lineTo(BX2 + r(4), tby);
     this.topBorderGfx.strokePath();
     this.topBorderGfx.lineStyle(2, 0x3355cc, 1);
-    this.topBorderGfx.moveTo(BX1 - r(4), BY1);
-    this.topBorderGfx.lineTo(BX2 + r(4), BY1);
+    this.topBorderGfx.moveTo(BX1 - r(4), tby);
+    this.topBorderGfx.lineTo(BX2 + r(4), tby);
     this.topBorderGfx.strokePath();
 
     this.matter.add.rectangle(BX1 - r(150), H / 2, r(300), wallH, { isStatic: true });
@@ -797,7 +824,7 @@ class Pinball extends Phaser.Scene {
       return;
     }
     this.gold -= 2;
-    this.goldTxt.setText(`GOLD  ${this.gold}`);
+    this.updateHUD();
     this.updateRerollBtn();
 
     // Keep peg types, randomise positions only — preserve tier/value for score pegs
@@ -818,26 +845,10 @@ class Pinball extends Phaser.Scene {
   // ─── HUD ─────────────────────────────────────────────────────────────────────
 
   buildHUD() {
-    const hy = r(18), hh = r(36), sub = r(44);
-    this.add.rectangle(W/2, hy, W, hh, 0x040408).setDepth(20);
-
-    this.scoreTxt = this.add.text(BX1+r(5), hy, `SCORE  ${this.score}`,
-      { fontSize: fs(12), color: '#6677bb', fontFamily: 'monospace' }
-    ).setOrigin(0, 0.5).setDepth(21);
-
-    this.goldTxt = this.add.text(W/2-r(90), hy, `GOLD  ${this.gold}`,
-      { fontSize: fs(12), color: '#ccaa00', fontFamily: 'monospace' }
-    ).setOrigin(0, 0.5).setDepth(21);
-
-    this.levelTxt = this.add.text(W/2, hy, `LEVEL  ${this.level}`,
-      { fontSize: fs(12), color: '#446644', fontFamily: 'monospace' }
-    ).setOrigin(0.5, 0.5).setDepth(21);
-
-    this.ballsTxt = this.add.text(BX2-r(5), hy, `BALLS  ${this.ballsLeft}`,
-      { fontSize: fs(12), color: '#337733', fontFamily: 'monospace' }
-    ).setOrigin(1, 0.5).setDepth(21);
+    const sub = BY1 + r(10);
 
     this.refreshHP();
+    this.updateHUD();
     this.checkLevelProgress();
 
     this.rerollBtn = this.add.text(BX2-r(5), sub, '↺ REROLL  -2G', {
@@ -876,6 +887,10 @@ class Pinball extends Phaser.Scene {
     }
   }
 
+  updateHUD() {
+    window.updateStats(this.level, this.score, this.gold, this.ballsLeft);
+  }
+
   refreshHP() {
     const hps = this.balls.length > 0 ? this.balls.map(b => b.hp) : [this.hp];
     window.updateSideHP?.(hps, this.maxHP);
@@ -910,9 +925,7 @@ class Pinball extends Phaser.Scene {
     this._dbgVals = {};
     const sync = () => {
       this.refreshHP();
-      this.goldTxt.setText(`G:${this.gold}`);
-      this.ballsTxt.setText(`B:${this.ballsLeft}`);
-      this.scoreTxt.setText(`SCORE  ${this.score}`);
+      this.updateHUD();
       this._dbgVals.gold?.setText(`${this.gold}`);
       this._dbgVals.hp?.setText(`${this.hp}/${this.maxHP}`);
       this._dbgVals.balls?.setText(`${this.ballsLeft}`);
@@ -938,7 +951,7 @@ class Pinball extends Phaser.Scene {
       });
     });
     dbBtn(DX+r(126), y, 'GAME OVER', () => { this.ballsLeft = 1; for (let i = this.balls.length-1; i >= 0; i--) this.drainBall(i); });
-    dbBtn(DX+r(216), y, 'RESET',     () => this.scene.start('Pinball', {}));
+    dbBtn(DX+r(216), y, 'RESET',     () => this.scene.start(this.myKey, {}));
     y += r(22);
 
     // ── STATS ───────────────────────────────────────────────────────────────
@@ -1138,7 +1151,7 @@ class Pinball extends Phaser.Scene {
     this.shieldHP = 0;
 
     this.ballsLeft--;
-    this.ballsTxt.setText(`BALLS  ${this.ballsLeft}`);
+    this.updateHUD();
 
     if (this.ballsLeft <= 0) {
       const ox = W/2, oy = H/2;
@@ -1278,8 +1291,7 @@ class Pinball extends Phaser.Scene {
   // ─── Score-based level progress ───────────────────────────────────────────────
 
   checkLevelProgress() {
-    this.scoreTxt.setText(`SCORE  ${this.score}`);
-    this.goldTxt.setText(`GOLD  ${this.gold}`);
+    this.updateHUD();
     if (getLevelType(this.level) === 'lock') {
       const lockPegs  = this.bumpers.filter(b => b.type === 'lock');
       if (!lockPegs.length) return;
@@ -1393,8 +1405,9 @@ class Pinball extends Phaser.Scene {
     this.gold += 5;
     fireHook(this, 'onLevelClear');
 
-    // Launch Shop immediately so it builds its UI in the background
-    this.scene.launch('Shop', {
+    // Launch partner scene above, scroll out simultaneously
+    this.scene.launch(this.nextKey, {
+      myKey:     this.nextKey,
       level:     this.level + 1,
       score:     this.score,
       ballsLeft: this.ballsLeft + 3,
@@ -1410,7 +1423,7 @@ class Pinball extends Phaser.Scene {
       scrollY:  -H,
       duration: 700,
       ease:     'Power2.easeInOut',
-      onComplete: () => this.scene.stop(),
+      onComplete: () => this.scene.stop(this.myKey),
     });
   }
 
@@ -1651,6 +1664,10 @@ class Pinball extends Phaser.Scene {
 }
 
 // ─── Shop Scene ───────────────────────────────────────────────────────────────
+class PinballB extends Pinball {
+  constructor() { super('PinballB'); }
+}
+
 class Shop extends Phaser.Scene {
   constructor() { super('Shop'); }
 
@@ -1923,6 +1940,7 @@ class Shop extends Phaser.Scene {
     this._proceeding = true;
 
     this.scene.launch('Pinball', {
+      myKey:     'Pinball',
       level:     this.level,
       score:     this.score,
       ballsLeft: this.ballsLeft,
@@ -1949,7 +1967,7 @@ new Phaser.Game({
   backgroundColor: '#060610',
   scale: {
     mode: Phaser.Scale.NONE,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
+    autoCenter: Phaser.Scale.CENTER_HORIZONTALLY,
   },
   physics: {
     default: 'matter',
@@ -1959,7 +1977,7 @@ new Phaser.Game({
       velocityIterations: 10
     }
   },
-  scene: [Pinball, Shop]
+  scene: [Pinball, PinballB, Shop]
 });
 </script>
 </body>
